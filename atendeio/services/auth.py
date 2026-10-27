@@ -60,6 +60,10 @@ class AuthService:
         """{"id","username"} da sessão válida, ou None."""
         return self._sessions.get_user(token_digest(token)) if token else None
 
+    def user_for_digest(self, digest: str) -> Optional[dict]:
+        """Mesma checagem de `user_for_token`, a partir do digest guardado num tíquete."""
+        return self._sessions.get_user(digest)
+
     def logout(self, token: Optional[str]) -> None:
         if token:
             self._sessions.delete(token_digest(token))

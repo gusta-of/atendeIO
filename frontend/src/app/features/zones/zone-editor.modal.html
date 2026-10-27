@@ -1,0 +1,118 @@
+<ion-header>
+  <ion-toolbar>
+    <ion-title>Áreas · {{ camera.name }}</ion-title>
+    <ion-buttons slot="end"><ion-button (click)="close()">Fechar</ion-button></ion-buttons>
+  </ion-toolbar>
+</ion-header>
+<ion-content [scrollY]="false">
+  <div class="body">
+    <div #stage class="stage">
+      <div class="vf" [style.width.px]="frame().w" [style.height.px]="frame().h">
+        @if (src(); as s) { <img [src]="s" alt="vídeo ao vivo para marcar áreas" draggable="false" (load)="onLoad($event)"> }
+        <svg #overlay class="ed-svg" [class.drawing]="tool() !== 'select'" [attr.viewBox]="'0 0 ' + frame().w + ' ' + frame().h"
+          (pointerdown)="down($event)" (pointermove)="move($event)" (pointerup)="up()" (pointercancel)="up()" (dblclick)="dbl($event)">
+          @for (s of shapes(); track s.i) {
+            @if (s.halo > 0) {
+              <polygon class="ed-halo" [attr.points]="s.points" fill="none" [attr.stroke]="s.color" [attr.stroke-opacity]="s.on ? 0.3 : 0.2" [attr.stroke-width]="s.halo" stroke-linejoin="round" />
+            }
+            <polygon class="ed-poly" [attr.data-zi]="s.i" [attr.points]="s.points" [attr.fill]="s.color" [attr.fill-opacity]="s.on ? 0.28 : 0.14" [attr.stroke]="s.color" [attr.stroke-width]="s.on ? 2.5 : 1.5" />
+            <text class="ed-label" [attr.x]="s.lx" [attr.y]="s.ly" text-anchor="middle" dominant-baseline="middle">{{ s.label }}</text>
+          }
+          @if (handles(); as h) {
+            @for (e of h.edges; track e.i) {
+              <rect class="ed-handle edge" [attr.data-h]="'e' + e.i" [attr.x]="e.x - 5" [attr.y]="e.y - 5" width="10" height="10" rx="2" [attr.transform]="'rotate(' + e.deg + ' ' + e.x + ' ' + e.y + ')'" />
+            }
+            @for (c of h.corners; track c.i) { <circle class="ed-handle" [attr.data-h]="'c' + c.i" [attr.cx]="c.x" [attr.cy]="c.y" r="7" /> }
+            @for (v of h.verts; track v.i) { <circle class="ed-handle" [attr.data-h]="'v' + v.i" [attr.cx]="v.x" [attr.cy]="v.y" r="7" /> }
+            <line class="ed-stem" [attr.x1]="h.pivot[0]" [attr.y1]="h.pivot[1]" [attr.x2]="h.at[0]" [attr.y2]="h.at[1]" />
+            <circle class="ed-rotate" data-h="rot" [attr.cx]="h.at[0]" [attr.cy]="h.at[1]" r="8" />
+          }
+          @if (draftView(); as d) {
+            @if (d.kind === 'shape') {
+              <polygon [attr.points]="d.points" fill="#22d3ee" fill-opacity=".18" stroke="#22d3ee" stroke-width="2" stroke-dasharray="6 4" pointer-events="none" />
+            } @else {
+              <polyline [attr.points]="d.line" fill="none" stroke="#22d3ee" stroke-width="2" stroke-dasharray="6 4" pointer-events="none" />
+              @for (p of d.dots; track $index) { <circle [attr.cx]="p.x" [attr.cy]="p.y" [attr.r]="p.r" fill="#22d3ee" pointer-events="none" /> }
+            }
+          }
+        </svg>
+      </div>
+    </div>
+
+    <div class="side">
+      <div class="tools">
+        @for (t of tools; track t.id) {
+          <button class="btn tool" type="button" [class.on]="tool() === t.id" [title]="t.hint + ' (' + t.key + ')'" (click)="setTool(t.id)">
+            @if (t.icon) { <svg width="22" height="18" viewBox="0 0 22 18" aria-hidden="true"><polygon [attr.points]="t.icon" fill="currentColor" fill-opacity=".18" stroke="currentColor" stroke-width="1.4" /></svg> }
+            @else { <span class="tool-ic">↖</span> }
+            <span>{{ t.label }}</span><kbd>{{ t.key }}</kbd>
+          </button>
+        }
+      </div>
+      <p class="muted small">{{ hint() }}</p>
+
+      @if (selected(); as z) {
+        <div class="props">
+          <div class="props-top">
+            <div class="preview" aria-hidden="true">
+              <svg width="64" height="46" viewBox="0 0 64 46"><polygon [attr.points]="previewPoints()" [attr.fill]="color(z)" fill-opacity=".3" [attr.stroke]="color(z)" stroke-width="1.6" /></svg>
+            </div>
+            <div class="grow">
+              <label>Nome / número <input id="ed-name" type="text" maxlength="40" placeholder="ex.: Mesa 3" aria-label="Nome da área" [value]="z.name" (input)="setName($any($event.target).value)"></label>
+              <small class="muted">{{ shapeLabel[z.shape] }}</small>
+            </div>
+          </div>
+          <label>Tipo
+            <select aria-label="Tipo da área" [value]="z.kind" (change)="setKind($any($event.target).value)">
+              @for (k of kinds; track k[0]) { <option [value]="k[0]" [selected]="k[0] === z.kind">{{ k[1] }}</option> }
+            </select>
+          </label>
+          @if (z.kind === 'mesa') {
+            <div class="seat">
+              <label>Área de assentos (sombra) — % da altura
+                <div class="angle-row">
+                  <input type="range" min="0" [max]="maxMargin" step="1" aria-label="Largura da área de assentos" [value]="seatPct()" (input)="setSeat($any($event.target).value)">
+                  <input type="number" min="0" [max]="maxMargin" step="1" aria-label="Largura da área de assentos em porcentagem" [value]="seatPct()" (input)="setSeat($any($event.target).value)">
+                </div>
+              </label>
+              <small class="muted">Quem sentar dentro da sombra ao redor da mesa conta como pessoa à mesa.</small>
+            </div>
+          }
+          @if (isPrim()) {
+            <div class="size">
+              <div class="size-row">
+                <label>{{ z.shape === 'square' ? 'Lado (px)' : 'Largura (px)' }} <input type="number" min="1" step="1" [value]="sizeW()" (change)="applySize('w', $any($event.target).value, sizeH())"></label>
+                @if (z.shape !== 'square') { <label>Altura (px) <input type="number" min="1" step="1" [value]="sizeH()" (change)="applySize('h', sizeW(), $any($event.target).value)"></label> }
+              </div>
+              @if (z.shape !== 'square') {
+                <label class="check"><input type="checkbox" [checked]="lock()" (change)="lock.set($any($event.target).checked)"> Manter proporção (ou segure Shift)</label>
+              }
+            </div>
+          }
+          <label>Rotação (°)
+            <div class="angle-row">
+              <input type="range" min="-180" max="180" step="1" aria-label="Rotação" [value]="z.angle | number:'1.0-0'" (input)="setAngle($any($event.target).value)">
+              <input type="number" min="-180" max="180" step="1" aria-label="Rotação em graus" [value]="z.angle | number:'1.0-0'" (input)="setAngle($any($event.target).value)">
+            </div>
+          </label>
+          <button class="btn ghost" type="button" (click)="remove()">Excluir área</button>
+        </div>
+      }
+
+      <h3 class="sub">Áreas desta câmera</h3>
+      <div class="list">
+        @for (it of items(); track it.i) {
+          <button type="button" class="item" [class.active]="it.i === sel()" [class.bad]="it.bad" (click)="pick(it.i)">
+            <svg width="34" height="24" viewBox="0 0 34 24" aria-hidden="true"><polygon [attr.points]="it.thumb" [attr.fill]="it.color" fill-opacity=".3" [attr.stroke]="it.color" stroke-width="1.4" /></svg>
+            <span>{{ it.z.name || '(sem nome)' }}</span><small>{{ kindLabel[it.z.kind] }}</small>
+          </button>
+        } @empty { <p class="muted small">Nenhuma área ainda. Escolha uma forma e desenhe no vídeo.</p> }
+      </div>
+      @if (error()) { <p class="form-err" role="alert">{{ error() }}</p> }
+      <div class="row">
+        <button class="btn primary" type="button" [disabled]="invalid() || saving()" [title]="invalid() ? 'Corrija nomes vazios ou repetidos' : ''" (click)="save()">{{ saving() ? 'Salvando…' : 'Salvar áreas' }}</button>
+        <button class="btn ghost" type="button" (click)="close()">Cancelar</button>
+      </div>
+    </div>
+  </div>
+</ion-content>

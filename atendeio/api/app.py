@@ -5,12 +5,13 @@ import contextlib
 from typing import Optional
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from ..config import Settings
 from ..container import Container, build_container
 from . import errors, middleware
-from .routes import auth, cameras, events, flow, health, pages, recognition, stream, zones
+from .routes import auth, cameras, events, flow, health, pages, recognition, spa, stream, tickets, zones
 
 
 def create_app(settings: Optional[Settings] = None, container: Optional[Container] = None) -> FastAPI:
@@ -55,8 +56,12 @@ def create_app(settings: Optional[Settings] = None, container: Optional[Containe
     app.state.container = container
     app.state.loop_lag_ms = lambda: round(max((d for _, d in lag["recent"]), default=0.0), 1)
     app.mount("/static", StaticFiles(directory=container.settings.static_dir), name="static")
-    middleware.install(app)
+    middleware.install(app, container.settings.cors_origins)
+    if container.settings.cors_origins:   # só apps nativos listados; sem credenciais de navegador (usam Bearer)
+        app.add_middleware(CORSMiddleware, allow_origins=list(container.settings.cors_origins), allow_credentials=False,
+                           allow_methods=["GET", "POST", "PUT", "DELETE"],
+                           allow_headers=["Authorization", "Content-Type", "Last-Event-ID"])
     errors.install(app)
-    for module in (pages, auth, cameras, zones, recognition, stream, events, flow, health):
+    for module in (pages, auth, cameras, zones, recognition, stream, events, tickets, flow, health, spa):
         app.include_router(module.router)
     return app

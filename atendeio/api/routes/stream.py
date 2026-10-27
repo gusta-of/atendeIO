@@ -5,19 +5,19 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 
 from ...streaming import mjpeg
-from ..deps import current_user, get_container, session_token
+from ..deps import MediaAuth, current_user, get_container, stream_auth
 from ..hubs import acquire_hub
 
 router = APIRouter(tags=["stream"])
 
 
 @router.get("/stream")
-async def stream(camera: int, request: Request, boxes: int = 1, areas: int = 1, user: dict = Depends(current_user)):
+async def stream(camera: int, request: Request, boxes: int = 1, areas: int = 1, media: MediaAuth = Depends(stream_auth)):
     """MJPEG ao vivo (com YOLO) de UMA câmera do próprio utilizador."""
     c = get_container(request)
+    user = media.user
     cam = await run_in_threadpool(c.cameras.get_owned, camera, user["id"])  # 404 se não for dele
     loop = asyncio.get_running_loop()
-    token = session_token(request)
 
     hub = await acquire_hub(c, cam, user)
     queue = hub.subscribe(loop, boxes=bool(boxes), areas=bool(areas))
@@ -31,7 +31,7 @@ async def stream(camera: int, request: Request, boxes: int = 1, areas: int = 1, 
         raise HTTPException(502, "Não consegui abrir a câmera (sem frames).")
 
     async def still_authorized() -> bool:
-        return await run_in_threadpool(c.auth.user_for_token, token) is not None
+        return await run_in_threadpool(media.still_valid)
 
     async def body():
         try:

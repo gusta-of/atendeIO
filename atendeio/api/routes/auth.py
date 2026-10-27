@@ -30,6 +30,18 @@ async def login(body: Credentials, request: Request, response: Response):
     return {"username": username}
 
 
+@router.post("/token")
+async def token(body: Credentials, request: Request):
+    """Login para apps nativos: devolve o token de sessão para usar em `Authorization: Bearer`.
+
+    Mesmas credenciais e MESMO limite de tentativas do /login. O navegador não usa isto (fica com o cookie
+    HttpOnly, que o JavaScript nunca enxerga)."""
+    ip = request.client.host if request.client else "?"
+    c = get_container(request)
+    username, tok = await run_in_threadpool(c.auth.login, body.username, body.password, ip)
+    return {"username": username, "token": tok, "expires_in": c.settings.session_ttl_s}
+
+
 @router.post("/logout")
 def logout(request: Request, response: Response):
     get_container(request).auth.logout(session_token(request))

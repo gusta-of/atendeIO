@@ -19,6 +19,7 @@ from .services.cameras import CameraService
 from .services.flow import FlowService
 from .services.monitor import MonitorScheduler, MonitorService
 from .services.recognition import RecognitionService
+from .services.tickets import TicketService
 from .services.zones import ZoneService
 from .services.throttle import LoginThrottle
 from .streaming.flow_writer import FlowWriter
@@ -36,6 +37,7 @@ class Container:
     zones: ZoneService
     recognition: RecognitionService
     flow: FlowService
+    tickets: TicketService
     flow_writer: FlowWriter
     monitor: MonitorService
     scheduler: MonitorScheduler
@@ -66,6 +68,7 @@ def build_container(settings: Settings, *, device_lister: Optional[Callable] = N
         detector=detector,
         registry=registry,
         flow=FlowService(flow_repo, camera_service, settings),
+        tickets=TicketService(box.derive("media-tickets"), settings.ticket_ttl_s),
         flow_writer=flow_writer,
         monitor=MonitorService(cameras, camera_service),
         scheduler=MonitorScheduler(cameras, camera_service, zones, registry, settings),

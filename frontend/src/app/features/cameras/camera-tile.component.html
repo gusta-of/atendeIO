@@ -1,0 +1,58 @@
+<article class="tile panel" [class.focus]="focused()" [class.rec-off]="rec() && !rec()!.enabled" (click)="focus()">
+  <header class="tile-head">
+    <span class="tile-name">{{ camera().name }}</span>
+    <span class="tile-meta muted">{{ state() ? state()!.fps + ' fps' : '' }}</span>
+    <button class="tile-x" type="button" title="Parar de assistir" aria-label="Parar de assistir" (click)="$event.stopPropagation(); unwatch()">×</button>
+  </header>
+
+  <div class="tile-tools" (click)="$event.stopPropagation()">
+    <label class="rec-sw">
+      <button class="switch sm" type="button" role="switch" [attr.aria-checked]="rec()?.enabled ?? true"
+        title="Liga/desliga o reconhecimento de objetos nesta câmera" (click)="toggleRecognition()"><span class="knob"></span></button>
+      <span>Reconhecer</span>
+    </label>
+    <button class="btn mini" type="button" title="Escolher quais objetos reconhecer" (click)="openObjects()">
+      Objetos{{ rec()?.classes?.length ? ' (' + rec()!.classes.length + ')' : '' }}
+    </button>
+    <label class="rec-sw">
+      <button class="switch sm" type="button" role="switch" [attr.aria-checked]="!!mon()?.enabled"
+        title="Monitoramento contínuo: analisa a câmera o dia todo, mesmo sem ninguém olhando, para a análise de fluxo" (click)="toggleMonitor()"><span class="knob"></span></button>
+      <span>Monitorar</span>
+    </label>
+    <button class="btn mini" type="button" [attr.aria-pressed]="view().areas" title="Mostrar/ocultar as áreas sobre o vídeo" (click)="setView('areas')">Áreas</button>
+    <button class="btn mini" type="button" [attr.aria-pressed]="view().boxes" title="Mostrar/ocultar as caixas do YOLO" (click)="setView('boxes')">Caixas</button>
+    <button class="btn mini" type="button" title="Marcar mesas e áreas" (click)="editZones()">Editar áreas</button>
+    <button class="btn mini" type="button" title="Janela com os dados da câmera em JSON, em tempo real" (click)="openLogs()">Logs</button>
+  </div>
+
+  <div #box class="tile-video">
+    <div class="vf" [style.width.px]="frame().w" [style.height.px]="frame().h">
+      @if (src(); as s) {
+        <img [src]="s" [alt]="'transmissão de ' + camera().name" draggable="false" (load)="onLoad($event)" (error)="onError()">
+      }
+      <svg class="ov" [attr.viewBox]="'0 0 ' + frame().w + ' ' + frame().h" aria-hidden="true">
+        @for (t of tags(); track t.id) {
+          <rect [attr.x]="t.x" [attr.y]="t.y" [attr.width]="t.w" height="16" rx="4" class="ov-tag" [style.stroke]="t.color" />
+          <text [attr.x]="t.x + 5" [attr.y]="t.y + 11.5" class="ov-tagtext">{{ t.text }}</text>
+        }
+      </svg>
+    </div>
+    @if (message()) { <div class="tile-msg">{{ message() }}</div> }
+  </div>
+
+  <div class="tile-chips">
+    @switch (chips().kind) {
+      @case ('connecting') { <span class="chip dim">conectando…</span> }
+      @case ('off') { <span class="chip off">Reconhecimento desligado</span> }
+      @case ('none') {
+        <button class="chip cta" type="button" (click)="$event.stopPropagation(); openObjects()">Nenhum objeto selecionado — escolher</button>
+      }
+      @default {
+        @if (okChips(); as c) {
+          @if (c.people !== null) { <span class="people-badge">{{ plural(c.people, 'pessoa', 'pessoas') }} na área</span> }
+          @for (o of c.others; track o.name) { <span class="chip">{{ o.count }} {{ o.name }}</span> }
+        }
+      }
+    }
+  </div>
+</article>

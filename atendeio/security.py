@@ -54,8 +54,14 @@ class SecretBox:
                     with os.fdopen(fd, "wb") as f:
                         f.write(Fernet.generate_key())
                 key = self._key_path.read_bytes().strip()
+            self._key = key
             self._fernet = Fernet(key)
         return self._fernet
+
+    def derive(self, label: str) -> bytes:
+        """Chave própria por finalidade (ex.: assinar tíquetes), derivada do segredo mestre sem expô-lo."""
+        self._get()
+        return hmac.new(self._key, f"atendeio:{label}".encode(), hashlib.sha256).digest()
 
     def encrypt(self, data: bytes) -> bytes:
         return self._get().encrypt(data)

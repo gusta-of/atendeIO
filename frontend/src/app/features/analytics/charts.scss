@@ -1,0 +1,14 @@
+:host { display: block; }
+.an-chart { width: 100%; display: block; }
+.an-chart text { fill: var(--viz-muted); font-size: 11px; font-family: inherit; }
+.an-chart .lbl { fill: var(--viz-ink-2); font-weight: 600; }
+.an-chart .grid { stroke: var(--viz-grid); stroke-width: 1; }
+.an-chart .base { stroke: var(--viz-base); stroke-width: 1; }
+.an-chart .hit { fill: transparent; }
+.an-chart .mark { transition: opacity .1s; }
+.an-chart .hit:hover + .mark, .an-chart .hit:focus + .mark { opacity: .8; }
+.an-chart .hit:focus { outline: none; }
+.an-chart .cross { stroke: var(--viz-base); stroke-width: 1; pointer-events: none; }
+.scale { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--viz-muted); margin-top: 8px; }
+.scale .bar { height: 8px; width: 160px; border-radius: 4px; background: linear-gradient(90deg, var(--seq-0), var(--seq-3), var(--seq-6), var(--seq-8), var(--seq-10)); }
+@media (prefers-reduced-motion: reduce) { .an-chart .mark { transition: none; } }

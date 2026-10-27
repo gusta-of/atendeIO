@@ -1,0 +1,35 @@
+# HTTPS na frente do atendeIO — pré-requisito para INSTALAR o app no celular (PWA) e para os apps nativos.
+#
+# Por que: navegadores só liberam "Instalar app" e service worker em HTTPS (ou localhost). Em http://IP-da-rede o
+# celular abre o painel normalmente, mas não instala. Os apps nativos (Android/iOS) também exigem HTTPS fora da rede local.
+#
+# Uso (Caddy 2, https://caddyserver.com):
+#   1. Aponte um nome (DNS) para a máquina que roda o atendeIO, ex.: atende.seurestaurante.com.br
+#      (na rede local, sem internet: use `tls internal` abaixo e instale a CA do Caddy no celular).
+#   2. Troque o nome abaixo e rode:  caddy run --config deploy/Caddyfile.example
+#   3. Suba o atendeIO só em loopback e com cookie seguro:
+#        ATENDEIO_HOST=127.0.0.1 ATENDEIO_COOKIE_SECURE=1 python app.py
+#      Apps nativos: acrescente  ATENDEIO_CORS_ORIGINS=capacitor://localhost,https://localhost
+#
+# O Caddy emite e renova o certificado sozinho (Let's Encrypt) quando o nome é público.
+
+atende.seurestaurante.com.br {
+	# rede local sem domínio público? descomente (certificado de uma CA interna do Caddy):
+	# tls internal
+
+	encode zstd gzip
+
+	# vídeo (MJPEG) e eventos ao vivo (SSE) NÃO podem ser comprimidos nem ficar em buffer
+	@live path /stream /api/cameras/*/events
+	handle @live {
+		reverse_proxy 127.0.0.1:8000 {
+			flush_interval -1
+			transport http {
+				response_header_timeout 0
+				read_timeout 0
+			}
+		}
+	}
+
+	reverse_proxy 127.0.0.1:8000
+}

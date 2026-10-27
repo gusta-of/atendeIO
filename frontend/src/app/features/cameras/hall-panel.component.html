@@ -1,0 +1,48 @@
+<section class="hall panel">
+  <div class="panel-head">
+    <h2>Salão · {{ camera().name }}</h2>
+    <span class="pill" title="Pessoas na área da câmera">{{ state()?.people ?? 0 }}</span>
+  </div>
+  <div class="body">
+    <div>
+      @if (summary().length) {
+        <div class="summary">
+          @for (s of summary(); track s.text) {
+            <span class="sum" [style.--c]="s.color">@if (s.n !== null) { <b>{{ s.n }}</b> } {{ s.text }}</span>
+          }
+        </div>
+      }
+      <h3 class="sub">Mesas e áreas</h3>
+      @if (!zones().length) {
+        <div class="empty small">
+          <p>Nenhuma área marcada nesta câmera.</p>
+          <button class="btn primary" type="button" (click)="editZones()">Marcar mesas e áreas</button>
+        </div>
+      } @else {
+        <div class="list">
+          @for (r of rows(); track r.id) {
+            <div class="row">
+              <svg class="thumb" width="34" height="24" viewBox="0 0 34 24" aria-hidden="true">
+                <polygon [attr.points]="r.thumb" [attr.fill]="r.color" fill-opacity=".35" [attr.stroke]="r.color" stroke-width="1.5" />
+              </svg>
+              <span class="name">{{ r.name }}</span>
+              <span class="status" [style.color]="r.color">{{ r.status }}</span>
+              <span class="info muted">{{ r.info }}</span>
+              @if (r.canClean) { <button class="btn mini" type="button" title="A equipe limpou esta mesa" (click)="clean(r.id)">Limpa</button> }
+            </div>
+          }
+          <button class="btn ghost mini edit" type="button" (click)="editZones()">Editar áreas</button>
+        </div>
+      }
+    </div>
+    <div>
+      <div class="people-card" [class.off]="!people().has"><b>{{ people().value }}</b><span>{{ people().label }}</span></div>
+      <h3 class="sub">Objetos reconhecidos</h3>
+      <div class="counts">
+        @for (c of counts(); track c.name) {
+          <div class="env-row"><span class="env-name">{{ c.name }}</span><span class="env-bar"><i [style.width.%]="c.pct"></i></span><span class="env-n">{{ c.count }}</span></div>
+        } @empty { <div class="empty small">{{ state() ? 'Nada reconhecido no momento.' : 'Aguardando detecções…' }}</div> }
+      </div>
+    </div>
+  </div>
+</section>

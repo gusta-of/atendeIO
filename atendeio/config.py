@@ -17,7 +17,8 @@ class Settings:
     host: str = "127.0.0.1"
     port: int = 8000
     # armazenamento
-    static_dir: Path = ROOT / "static"
+    static_dir: Path = ROOT / "static"                      # frontend antigo (convive até a virada)
+    frontend_dir: Path = ROOT / "frontend" / "www"           # frontend novo (Ionic/Angular compilado)
     data_dir: Path = ROOT / "data"
     model_path: Path = ROOT / "yolov8n.pt"
     seg_model_path: Path = ROOT / "yolov8n-seg.pt"  # silhuetas (oclusão das áreas); baixa sozinho na 1ª vez
@@ -27,6 +28,8 @@ class Settings:
     cookie_secure: bool = False
     session_ttl_s: int = 7 * 24 * 3600
     session_recheck_s: float = 30.0  # stream em andamento reconfere se a sessão vale
+    ticket_ttl_s: int = 60           # tíquete de mídia (apps nativos): vale só para ABRIR o vídeo/eventos
+    cors_origins: tuple = ()         # origens dos apps nativos (ex.: capacitor://localhost); vazio = só mesma origem
     login_fail_limit: int = 5
     login_fail_window_s: int = 600
     # visão / streaming
@@ -75,10 +78,12 @@ class Settings:
             host=_env("HOST", cls.host),
             port=int(_env("PORT", str(cls.port))),
             data_dir=Path(_env("DATA", str(cls.data_dir))),
+            frontend_dir=Path(_env("FRONTEND_DIR", str(cls.frontend_dir))),
             secret_key=_env("SECRET_KEY", ""),
             allow_signup=_env("ALLOW_SIGNUP", "1") == "1",
             cookie_secure=_env("COOKIE_SECURE", "0") == "1",
             session_ttl_s=int(_env("SESSION_TTL", str(cls.session_ttl_s))),
+            cors_origins=tuple(o.strip().rstrip("/") for o in _env("CORS_ORIGINS", "").split(",") if o.strip()),
             max_fps=float(_env("MAX_FPS", str(cls.max_fps))),
             occlusion=_env("OCCLUSION", "1") == "1",
             monitor_fps=float(_env("MONITOR_FPS", str(cls.monitor_fps))),
