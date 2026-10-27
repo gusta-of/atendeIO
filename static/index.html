@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>atendeIO · Painel de Câmeras</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+          <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/>
+          <circle cx="12" cy="12" r="3.5" fill="currentColor"/>
+        </svg>
+      </span>
+      <div><h1>atendeIO</h1><p>Painel de Câmeras</p></div>
+    </div>
+    <div class="top-right">
+      <span id="user-name" class="muted"></span>
+      <button id="btn-logout" class="btn ghost" type="button">Sair</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- ── Minhas câmeras ─────────────────────── -->
+    <aside class="panel sidebar">
+      <div class="panel-head">
+        <h2>Minhas câmeras</h2>
+        <span id="cam-count" class="pill">0</span>
+      </div>
+      <div id="cam-list" class="cam-list"></div>
+
+      <div class="add-actions">
+        <button id="btn-add-rtsp" class="btn" type="button">+ Câmera IP (RTSP)</button>
+        <button id="btn-add-local" class="btn" type="button">+ Câmera local</button>
+      </div>
+
+      <form id="rtsp-form" class="form compact" autocomplete="off" hidden>
+        <label>Nome <input id="r-name" type="text" maxlength="80" placeholder="ex.: Recepção"></label>
+        <label>Marca
+          <select id="r-brand"></select>
+        </label>
+        <div class="row">
+          <label class="grow">IP da câmera <input id="r-host" type="text" required maxlength="253" placeholder="192.168.1.50"></label>
+          <label class="port">Porta <input id="r-port" type="number" min="1" max="65535" value="554"></label>
+        </div>
+        <label>Usuário da câmera <input id="r-user" type="text" maxlength="128" autocomplete="off"></label>
+        <label>Senha da câmera <input id="r-pass" type="password" maxlength="256" autocomplete="new-password"></label>
+        <label>Caminho do stream <input id="r-path" type="text" maxlength="200" placeholder="stream1"></label>
+        <p id="rtsp-err" class="form-err" role="alert" hidden></p>
+        <div class="row">
+          <button class="btn primary" type="submit">Cadastrar</button>
+          <button id="rtsp-cancel" class="btn ghost" type="button">Cancelar</button>
+        </div>
+      </form>
+
+      <div id="local-box" class="local-box" hidden>
+        <p class="muted small">Câmeras conectadas ao servidor e livres:</p>
+        <div id="local-list"></div>
+      </div>
+    </aside>
+
+    <!-- ── Ao vivo (várias câmeras) ───────────── -->
+    <section class="panel stage">
+      <div id="stage-empty" class="stage-empty">
+        <div class="empty-inner">
+          <div class="empty-icon" aria-hidden="true">
+            <svg width="56" height="56" viewBox="0 0 24 24" fill="none">
+              <rect x="2" y="6" width="14" height="12" rx="2" stroke="currentColor" stroke-width="1.6"/>
+              <path d="M16 10l4-2v8l-4-2" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <h3 id="empty-title">Nenhuma câmera selecionada</h3>
+          <p id="empty-text">Cadastre uma câmera e marque as que deseja ver ao vivo.</p>
+        </div>
+      </div>
+      <div id="grid" class="grid" hidden></div>
+    </section>
+
+    <!-- ── Salão (câmera em foco) ─────────────── -->
+    <aside class="panel env">
+      <div class="panel-head">
+        <h2 id="env-title">Salão</h2>
+        <span id="env-total" class="pill" title="Pessoas na área da câmera">0</span>
+      </div>
+      <div class="env-body">
+        <div>
+          <div class="hall-summary" id="hall-summary"></div>
+          <h3 class="env-sub">Mesas e áreas</h3>
+          <div id="hall-list" class="hall-list"></div>
+        </div>
+        <div>
+          <div id="hall-people"></div>
+          <h3 class="env-sub">Objetos reconhecidos</h3>
+          <div id="env-counts" class="env-counts"></div>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <script src="/static/shapes.js"></script>
+  <script src="/static/app.js"></script>
+  <script src="/static/zones.js"></script>
+  <script src="/static/recognition.js"></script>
+  <script src="/static/logs.js"></script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+# Dependências do projeto atendeIO (testadas com Python 3.14)
+# torch/vision entram automaticamente como dependência do ultralytics.
+numpy==2.5.4
+opencv-python==5.0.0.93
+ultralytics==8.4.183
+
+# Painel web: API + servidor
+fastapi==0.159.1
+uvicorn==0.54.0
+
+# Segurança: criptografia das credenciais RTSP em repouso
+cryptography==50.0.2
