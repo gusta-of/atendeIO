@@ -8,6 +8,8 @@ se você ligar o monitoramento.
 
 **Regra central:** cada câmera tem um único dono. Nenhum utilizador vê, lista ou abre a câmera de outro.
 
+> Documentação de engenharia (visão geral, arquitetura, segurança, frontend, API, deploy, estado): veja [`docs/`](docs/README.md).
+
 ## Rodar
 
 ```bash

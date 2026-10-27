@@ -34,7 +34,7 @@ class Settings:
     login_fail_window_s: int = 600
     # visão / streaming
     conf_threshold: float = 0.45
-    max_fps: float = 15.0            # teto de inferência por câmera
+    max_fps: float = 5.0            # teto de inferência por câmera
     idle_ttl_s: float = 30.0         # libera a câmera sem espectadores
     jpeg_quality: int = 75
     max_cameras: int = 12            # pipelines simultâneos no servidor
