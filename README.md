@@ -19,27 +19,56 @@ node --test tests/js/shapes.test.js   # matemática das formas (rotação, redim
 ```
 
 Variáveis (`ATENDEIO_*`): `HOST`, `PORT`, `ALLOW_SIGNUP`, `COOKIE_SECURE` (use `1` atrás de HTTPS),
-`DATA`, `SECRET_KEY`, `MAX_FPS`, `IDLE_TTL`, `MAX_CAMERAS`, `MAX_CAMERAS_PER_USER`, `JPEG_QUALITY`.
+`DATA`, `SECRET_KEY`, `MAX_FPS`, `MONITOR_FPS`, `TIMEZONE`, `IDLE_TTL`, `MAX_CAMERAS`, `MAX_CAMERAS_PER_USER`, `JPEG_QUALITY`,
+`FLOW_MINUTE_DAYS`, `FLOW_HOUR_DAYS`, `LOG_EVENTS_PER_S`, `OCCLUSION`.
 Rode **um processo só** (pipelines das câmeras vivem em memória). Para expor a mais de uma máquina,
 ponha um proxy HTTPS na frente e defina `ATENDEIO_COOKIE_SECURE=1`.
 
-## Logs em tempo real (telemetria da câmera em JSON)
+## Análise de fluxo (por dia e por hora)
 
-Botão **Logs** em cada câmera: abre uma **janela flutuante** (arrastável, redimensionável, recolhível) que mostra o que a
-câmera "vê" convertido em JSON, em tempo real. Dá para **pausar, filtrar por tipo, buscar, copiar e baixar tudo em
-NDJSON** (uma linha de JSON por evento) para analisar fora (jq, pandas, planilha). Clique numa linha para ver o JSON completo.
+Página **Análise de fluxo** (`/analytics`, link no topo do painel): média e **pico de pessoas ao mesmo tempo**, **hora mais
+cheia e mais vazia**, dia da semana mais e menos movimentado, **mapa de calor** dia da semana × hora, média dia a dia, a curva de
+um dia (de 5 em 5 minutos), as áreas mais cheias e frases com o que os números dizem. Filtros numa linha só: câmera, período
+(hoje, 7, 30, 90 dias ou personalizado) e **horário de funcionamento** (para as horas fechadas não virarem "mais vazias").
+Todo gráfico tem uma versão em tabela, e dá para **baixar CSV**. Os dias e as horas seguem o fuso do restaurante
+(`ATENDEIO_TIMEZONE`, padrão `America/Sao_Paulo`).
+
+**De onde vêm os dados:** ligue **Monitorar** na câmera (no painel ou na própria página de análise; exige o reconhecimento
+ligado com **Pessoa** marcada). O servidor passa a analisar a câmera **o dia todo, mesmo sem ninguém olhando o vídeo**
+(ou só no horário de funcionamento que você definir), em **ritmo baixo** (`ATENDEIO_MONITOR_FPS`, padrão 1 quadro/s) e **sem
+gerar vídeo**; se alguém abre o vídeo, sobe para o ritmo cheio e volta ao fechar. O hub é reiniciado sozinho se morrer.
+
+**O que é guardado:** só **números agregados**, nunca imagens: pessoas por minuto, por hora e por área (≈1 440 linhas/dia por
+câmera). Retenção: minutos 30 dias, horas 2 anos (`ATENDEIO_FLOW_MINUTE_DAYS`, `ATENDEIO_FLOW_HOUR_DAYS`). Momentos em que
+a câmera estava fora do ar, com o reconhecimento desligado ou sem "Pessoa" **não viram "0 pessoas"**: viram lacuna, e aparecem
+como *cobertura* abaixo de 100%.
+
+**Nunca trava a aplicação:** a gravação no banco é feita por **uma thread própria** com fila limitada (se o disco travar, os
+lotes mais antigos são descartados e a câmera nem percebe), e o hub só entrega números agregados a cada ~15 s.
+`GET /api/health` mostra o atraso do laço de eventos (se passar de ~200 ms, algo está bloqueando) e os contadores do escritor.
+
+Para ver a tela sem esperar dias, gere dados fictícios num banco de **demonstração**:
+`ATENDEIO_DATA=/tmp/demo python scripts/seed_flow.py --camera 1 --days 14 --yes` (recusa câmeras com histórico real).
+
+## Logs em tempo real (depuração)
+
+Botão **Logs** em cada câmera: uma **janela flutuante** (arrastável, redimensionável, recolhível) com o que a câmera "vê" em JSON,
+quase em tempo real — para **conferir** o que está acontecendo. A análise de verdade está na página de **Análise de fluxo**.
+Dá para pausar, filtrar por tipo, buscar, copiar e **baixar em NDJSON** (uma linha de JSON por evento).
 
 | tipo | o que é |
 |---|---|
 | `change` | algo mudou: `people.changed`, `area.status` (mesa livre→ocupada...), `area.people`, `objects.changed`, `camera.online/offline`, `recognition.changed`, `zones.updated`, `area.cleaned` |
-| `snapshot` | retrato do estado, 1 por segundo (pessoas, objetos, mesas, fps) |
-| `frame` | detalhado, por quadro, com cada detecção (classe, confiança, caixa). Só é montado **enquanto alguém pede** (caixa "Quadros") |
-| `system` | do próprio canal (ex.: `events.dropped` se o navegador não acompanhou) |
+| `snapshot` | retrato do estado, 1 por segundo |
+| `frame` | detalhado, com cada detecção e caixa, **amostrado a ≤ 2/s**; desligado por padrão e só montado enquanto alguém pede |
+| `system` | do próprio canal (ex.: `events.throttled`: eventos cortados pelo orçamento) |
 
-Os mesmos eventos saem por **SSE** em `GET /api/cameras/ID/events` (`?detail=1` liga os quadros, `?history=0` pula o buffer;
-reconectar com `Last-Event-ID` entrega só o que faltou). Só o dono da câmera acessa; ouvir conta como espectador (liga a
-câmera e respeita os limites). Cada evento: `{"seq","ts","time","camera","type","event","data"}`. O servidor guarda só os
-**últimos 500** eventos em memória; **nada vai pra disco**: o que você quiser guardar, baixe na janela.
+Os mesmos eventos saem por **SSE** em `GET /api/cameras/ID/events` (`?detail=1` liga os quadros; reconectar com `Last-Event-ID` entrega
+só o que faltou). Só o dono da câmera acessa; ouvir conta como espectador. **Feita para não pesar:** cada evento é serializado uma
+vez, **cada conexão tem um orçamento de eventos/s** (`ATENDEIO_LOG_EVENTS_PER_S`, padrão 10; o excedente é descartado e resumido),
+o servidor guarda só os últimos 200 em memória, a lista no navegador é **virtualizada** (poucas dezenas de linhas no DOM, qualquer que
+seja o volume) e desenhada a 4 Hz, e a conexão é **fechada** quando a janela está recolhida ou a aba em segundo plano.
+Nada vai pra disco.
 
 Limite do navegador: em HTTP/1.1 cada aba abre no máximo ~6 conexões por endereço, e cada câmera usa uma (vídeo) mais uma por
 janela de logs. Para muitas câmeras, sirva atrás de um proxy HTTPS com **HTTP/2**.
@@ -85,11 +114,11 @@ A dependência só aponta para baixo:
 
 ```
 api/            HTTP: rotas, schemas, middleware, deps; erros de domínio -> status
-analytics/      geometria, rastreador de pessoas e estado das mesas (puro, testável com relógio injetado)
+analytics/      geometria, rastreador, estado das mesas e histórico de fluxo (puro, testável com relógio injetado)
 services/       regras de negócio (auth, câmeras, RTSP, áreas); sem HTTP, sem SQL
 repositories/   SQL puro; toda consulta de câmera é filtrada por dono
 vision/         YOLO (Detector), inventário (puro), abertura de fontes (OpenCV)
-streaming/      CameraHub (1 pipeline por câmera), HubRegistry, MJPEG
+streaming/      CameraHub (1 pipeline por câmera), HubRegistry, MJPEG, eventos/SSE, FlowWriter (única thread que grava o histórico)
 container.py    composition root: monta tudo; sem singletons globais
 config.py       Settings imutável (env) · errors.py erros de domínio · security.py hash/Fernet
 ```

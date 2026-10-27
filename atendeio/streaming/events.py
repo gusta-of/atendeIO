@@ -17,15 +17,30 @@ Tipos
 
 import asyncio
 import contextlib
+import json
 import threading
 import time
 from collections import deque
 from datetime import datetime, timezone
 from typing import Callable, List, Optional
 
-HISTORY = 500           # eventos guardados em memória por câmera
+HISTORY = 200           # eventos guardados em memória por câmera (a janela de logs é só depuração)
 SUB_QUEUE = 1000        # fila por ouvinte: se encher, descarta os mais antigos e conta
 SNAPSHOT_EVERY_S = 1.0
+
+
+class Event(dict):
+    """O envelope do evento. `raw` guarda o texto SSE já pronto: serializa UMA vez (na thread que emitiu) em vez de
+    uma vez por ouvinte dentro do laço de eventos, que é o que travava a aplicação com muitos logs."""
+    __slots__ = ("raw",)
+
+
+def encode_sse(ev: dict) -> bytes:
+    raw = getattr(ev, "raw", None)
+    if raw is not None:
+        return raw
+    body = json.dumps(ev, ensure_ascii=False, separators=(",", ":"))
+    return f"id: {ev['seq']}\nevent: {ev['type']}\ndata: {body}\n\n".encode()
 
 
 def iso(ts_ms: int) -> str:
@@ -35,23 +50,55 @@ def iso(ts_ms: int) -> str:
 class Subscriber:
     """Um ouvinte (uma conexão SSE). A fila é descartável: ouvinte lento perde eventos antigos, nunca trava o hub."""
 
-    def __init__(self, loop, detail: bool):
+    def __init__(self, loop, detail: bool, rate: float = 10.0, burst: Optional[float] = None):
         self.loop, self.detail = loop, detail
         self.queue: asyncio.Queue = asyncio.Queue(maxsize=SUB_QUEUE)
-        self.dropped = 0  # lido/zerado pelo consumidor, na thread do loop
+        self._dropped = 0
+        self._dlock = threading.Lock()
+        self._rate = rate                                 # eventos/s que esta conexão aguenta (0 = sem limite)
+        self._cap = burst if burst is not None else max(rate * 3, 10.0)
+        self._tokens, self._t = self._cap, None
+
+    def allow(self, now: float) -> bool:
+        """Balde de fichas: decide NA ORIGEM se este evento vai pra esta conexão. Negado = nem acorda o laço de eventos."""
+        if self._rate <= 0:
+            return True
+        if self._t is not None:
+            self._tokens = min(self._cap, self._tokens + (now - self._t) * self._rate)
+        self._t = now
+        if self._tokens >= 1.0:
+            self._tokens -= 1.0
+            return True
+        self.add_dropped(1)
+        return False
+
+    def add_dropped(self, n: int) -> None:
+        with self._dlock:
+            self._dropped += n
+
+    def take_dropped(self) -> int:
+        with self._dlock:
+            n, self._dropped = self._dropped, 0
+        return n
+
+    @property
+    def dropped(self) -> int:
+        return self._dropped
 
     def _put(self, item) -> None:  # roda na thread do loop
         if self.queue.full():
             with contextlib.suppress(asyncio.QueueEmpty):
                 self.queue.get_nowait()
-            self.dropped += 1
+            self.add_dropped(1)
         with contextlib.suppress(asyncio.QueueFull):
             self.queue.put_nowait(item)
 
 
 class EventBus:
-    def __init__(self, camera_id: int, history: int = HISTORY, clock: Callable[[], float] = time.time):
+    def __init__(self, camera_id: int, history: int = HISTORY, clock: Callable[[], float] = time.time,
+                 rate: float = 10.0):
         self.camera_id = camera_id
+        self._rate = rate
         self._ring = deque(maxlen=history)
         self._subs: List[Subscriber] = []
         self._seq = 0
@@ -67,11 +114,12 @@ class EventBus:
                 return None
             self._seq += 1
             ts = int(self._clock() * 1000)
-            ev = {"seq": self._seq, "ts": ts, "time": iso(ts), "camera": self.camera_id,
-                  "type": type_, "event": event, "data": data}
+            ev = Event(seq=self._seq, ts=ts, time=iso(ts), camera=self.camera_id, type=type_, event=event, data=data)
+            ev.raw = encode_sse(ev)             # serializa uma vez, aqui, fora do laço de eventos
             if type_ != "frame":
                 self._ring.append(ev)
-            targets = [s for s in self._subs if type_ != "frame" or s.detail]
+            now = self._clock()
+            targets = [s for s in self._subs if (type_ != "frame" or s.detail) and s.allow(now)]
         for s in targets:
             with contextlib.suppress(RuntimeError):  # loop do ouvinte já fechou
                 s.loop.call_soon_threadsafe(s._put, ev)
@@ -85,7 +133,7 @@ class EventBus:
     def subscribe(self, loop, detail: bool = False, since: Optional[int] = None, history: bool = True):
         """Devolve (ouvinte, backlog). O backlog é o que já está no buffer (só eventos com seq > since),
         entregue na mesma operação em que o ouvinte entra: nada se perde nem duplica entre os dois."""
-        sub = Subscriber(loop, detail)
+        sub = Subscriber(loop, detail, self._rate)
         with self._lock:
             backlog = [e for e in self._ring if (since is None or e["seq"] > since)] if history else []
             self._subs.append(sub)

@@ -8,7 +8,7 @@ import json
 import time
 from typing import Awaitable, Callable, List, Optional
 
-from .events import Subscriber
+from .events import Subscriber, encode_sse
 from .hub import CameraHub
 
 MEDIA_TYPE = "text/event-stream"
@@ -17,8 +17,7 @@ HEARTBEAT_S = 15.0
 
 def encode(ev: dict) -> bytes:
     """Um evento no formato SSE (o `data` é uma linha de JSON, sem quebras)."""
-    body = json.dumps(ev, ensure_ascii=False, separators=(",", ":"))
-    return f"id: {ev['seq']}\nevent: {ev['type']}\ndata: {body}\n\n".encode()
+    return encode_sse(ev)
 
 
 def _system(event: str, data: dict) -> bytes:
@@ -49,9 +48,9 @@ async def events_stream(hub: CameraHub, sub: Subscriber, backlog: List[dict],
             ev = await asyncio.wait_for(sub.queue.get(), timeout=heartbeat_s)
         except asyncio.TimeoutError:
             yield b": ping\n\n"
-        if sub.dropped:  # o ouvinte não acompanhou: avisa quantos eventos ficaram pra trás
-            n, sub.dropped = sub.dropped, 0
-            yield _system("events.dropped", {"count": n})
+        n = sub.take_dropped()
+        if n:  # passou do orçamento de eventos/s (ou o ouvinte não acompanhou): avisa quantos ficaram de fora
+            yield _system("events.throttled", {"count": n})
         if time.monotonic() >= next_check:
             next_check = time.monotonic() + recheck_every_s
             if not await still_authorized():

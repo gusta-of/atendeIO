@@ -12,6 +12,7 @@ from typing import Callable, Iterable, Optional
 
 import cv2
 
+from ..analytics.flow import FlowAggregator
 from ..analytics.people import PeopleCounter
 from ..analytics.tracker import PersonTracker
 from ..analytics.zones import AnalyticsConfig, Zone, ZoneAnalyzer
@@ -37,9 +38,15 @@ def _put_latest(q: asyncio.Queue, item) -> None:
 class CameraHub:
     def __init__(self, cam_id: int, owner_id: int, get_source: Callable, detector: Detector,
                  settings: Settings, zones: Iterable[Zone] = (), enabled: bool = True,
-                 classes: Optional[frozenset] = None):
-        """`get_source()` é chamado a cada (re)conexão: credenciais não ficam em atributo."""
+                 classes: Optional[frozenset] = None, flow_sink: Optional[Callable[[dict], object]] = None):
+        """`get_source()` é chamado a cada (re)conexão: credenciais não ficam em atributo.
+        `flow_sink(lote)` recebe o histórico de fluxo agregado (nunca bloqueia: é a fila do FlowWriter)."""
         self.cam_id, self.owner_id = cam_id, owner_id
+        self.monitor = False          # monitoramento contínuo: o hub fica de pé mesmo sem ninguém assistindo
+        self._wake = threading.Event()  # acorda a espera entre quadros (novo espectador, parada)
+        self._flow = FlowAggregator(cam_id, settings.flow_flush_s)
+        self._flow_sink = flow_sink
+        self._last_flow_sample = 0.0
         self._get_source, self._detector, self._cfg = get_source, detector, settings
         self.stop_event = threading.Event()
         self.ready = threading.Event()
@@ -65,7 +72,8 @@ class CameraHub:
         self.fps = 0.0
 
         # Telemetria em JSON, em tempo real (ver streaming/events.py)
-        self.events = EventBus(cam_id)
+        self.events = EventBus(cam_id, history=settings.log_history, rate=settings.log_events_per_s)
+        self._last_frame_evt = 0.0
         self._prev_state = None
         self._prev_counts = None
         self._last_snapshot = 0.0
@@ -91,10 +99,17 @@ class CameraHub:
 
     def stop(self):
         self.stop_event.set()
+        self._wake.set()
         with self._cv:
             self._cv.notify_all()
         for t in self._threads:
             t.join(timeout=8.0)
+        self._flush_flow()  # o que ainda estava em memória vai pro histórico
+
+    @property
+    def alive(self) -> bool:
+        """Pipeline de pé: as duas threads rodando e ninguém pediu parada (uma thread que morreu vira zumbi)."""
+        return not self.stop_event.is_set() and all(t.is_alive() for t in self._threads)
 
     def _reader(self):
         cap, backoff = None, 1.0
@@ -136,8 +151,11 @@ class CameraHub:
             self._conn_key = key
             self.events.emit("change", "camera.online" if online else "camera.offline", {"reason": reason})
 
+    def _has_video(self) -> bool:
+        with self._pub_lock:
+            return bool(self._subs)
+
     def _infer(self):
-        min_dt = 1.0 / self._cfg.max_fps
         last_fid, fps = 0, 0.0
         while not self.stop_event.is_set():
             with self._cv:
@@ -148,6 +166,9 @@ class CameraHub:
                     break
                 frame, last_fid = self._frame, self._fid
             t0 = time.monotonic()
+            # ritmo: cheio com vídeo aberto; devagar (monitor_fps) quando só a análise está rodando
+            has_video = self._has_video()
+            target_fps = self._cfg.max_fps if has_video else self._cfg.monitor_fps
             try:
                 enabled, classes = self._recognition
                 wants = self._wanted()
@@ -156,19 +177,23 @@ class CameraHub:
                                   and any(areas for areas, _ in wants))
                 dets = self._detector.detect(frame, classes, masks=need_masks) if enabled else []
                 self.mask_frames += need_masks
-                variants = self._encode_variants(frame, dets, wants)
-            except Exception as e:  # um frame ruim não derruba a câmera por horas
+                variants = self._encode_variants(frame, dets, wants) if has_video else {}  # sem espectador: zero JPEG
+                if not has_video:
+                    with self._pub_lock:  # não deixa um quadro velho de primeira imagem pro próximo espectador
+                        self._jpeg = {(False, False): b""}
+                now = time.monotonic()
+                state = self._build_state(dets, frame.shape, now)
+                self._publish(variants, state)
+                self._emit_telemetry(dets, state, now)
+            except Exception as e:  # um quadro ruim não derruba a câmera por horas (nem mata a thread em silêncio)
                 print(f"[-] inferência câmera {self.cam_id}: {type(e).__name__}: {e}")
                 self.stop_event.wait(0.5)
                 continue
-            now = time.monotonic()
-            state = self._build_state(dets, frame.shape, now)
-            self._publish(variants, state)
-            self._emit_telemetry(dets, state, now)
             dt = max(time.monotonic() - t0, 1e-4)
             fps = 0.9 * fps + 0.1 * (1.0 / dt) if fps else 1.0 / dt
-            self.fps = min(fps, self._cfg.max_fps)
-            self.stop_event.wait(max(0.0, min_dt - dt))  # teto de FPS: poupa a CPU
+            self.fps = min(fps, target_fps)
+            self._wake.wait(max(0.0, 1.0 / target_fps - dt))  # teto de FPS: poupa a CPU; novo espectador interrompe
+            self._wake.clear()
 
     def _encode_variants(self, frame, dets: list, wants: set) -> dict:
         """{(áreas, caixas): jpeg} — o limpo sempre; os demais só se algum espectador pediu."""
@@ -214,8 +239,37 @@ class CameraHub:
             self._prev_counts = counts
             self._last_snapshot = now
             self.events.emit("snapshot", "state", snapshot_of(state, self.fps, self.viewers, self.online))
-        if self.events.wants_detail():  # o custo de montar o detalhe só existe com ouvinte detalhado
+        self._sample_flow(state)
+        # quadro detalhado: só com ouvinte pedindo, e amostrado (a depuração não precisa de todo quadro)
+        if now - self._last_frame_evt >= 1.0 / self._cfg.log_frame_hz and self.events.wants_detail():
+            self._last_frame_evt = now
             self.events.emit("frame", "frame", frame_of(dets, state, self.fps))
+
+    def _can_measure_people(self, state: dict) -> bool:
+        """Só vale como medida se a câmera está no ar, o reconhecimento ligado e "Pessoa" habilitada:
+        senão "0 pessoas" seria mentira (cegueira), e não ausência de gente."""
+        rec = state.get("recognition") or {}
+        return bool(self.online and rec.get("enabled") and rec.get("classes") != 0 and rec.get("person")
+                    and state.get("people") is not None)
+
+    def _sample_flow(self, state: dict) -> None:
+        """Uma amostra por segundo da contagem já estabilizada → agregador em memória. Nada de banco aqui."""
+        ts = time.time()
+        if ts - self._last_flow_sample < 0.9:       # tolerância: com 1 fps os quadros chegam ~0,99 s um do outro
+            return
+        self._last_flow_sample = ts
+        if self._can_measure_people(state):
+            self._flow.sample(ts, state["people"], state.get("areas", []))
+        if self._flow.due(ts):
+            self._flush_flow(ts)
+
+    def _flush_flow(self, ts: Optional[float] = None) -> None:
+        batch = self._flow.flush(ts)
+        if batch and self._flow_sink:
+            try:
+                self._flow_sink(batch)   # só enfileira; quem grava é a thread escritora
+            except Exception as e:
+                print(f"[-] histórico de fluxo da câmera {self.cam_id}: {type(e).__name__}")
 
     def _build_state(self, dets: list, shape, now: float) -> dict:
         """Inventário por classe, pessoas na área da câmera e análise das áreas do utilizador."""
@@ -277,10 +331,12 @@ class CameraHub:
             self.state = state
             self._jpeg.update({k: v for k, v in variants.items() if v is not None})
             subs = list(self._subs)
-        clean = variants[(False, False)]
+        clean = variants.get((False, False))
         has_zones = self._analyzer.has_zones
         for loop, q, areas, boxes in subs:
             frame = variants.get((areas and has_zones, boxes)) or clean
+            if frame is None:
+                continue
             with contextlib.suppress(RuntimeError):  # loop já fechou
                 loop.call_soon_threadsafe(_put_latest, q, frame)
         self.ready.set()
@@ -293,6 +349,7 @@ class CameraHub:
         q = asyncio.Queue(maxsize=1)
         with self._pub_lock:
             self._subs.append((loop, q, areas, boxes))
+        self._wake.set()
         return q
 
     def unsubscribe(self, q) -> None:

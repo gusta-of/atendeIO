@@ -9,15 +9,19 @@ from typing import Callable, Optional
 from .config import Settings
 from .db import Database
 from .repositories.cameras import CameraRepository
+from .repositories.flow import FlowRepository
 from .repositories.sessions import SessionRepository
 from .repositories.zones import ZoneRepository
 from .repositories.users import UserRepository
 from .security import SecretBox
 from .services.auth import AuthService
 from .services.cameras import CameraService
+from .services.flow import FlowService
+from .services.monitor import MonitorScheduler, MonitorService
 from .services.recognition import RecognitionService
 from .services.zones import ZoneService
 from .services.throttle import LoginThrottle
+from .streaming.flow_writer import FlowWriter
 from .streaming.registry import HubRegistry
 from .vision.detector import Detector
 from .vision.sources import list_v4l2_devices
@@ -31,6 +35,10 @@ class Container:
     cameras: CameraService
     zones: ZoneService
     recognition: RecognitionService
+    flow: FlowService
+    flow_writer: FlowWriter
+    monitor: MonitorService
+    scheduler: MonitorScheduler
     detector: Detector
     registry: HubRegistry
 
@@ -43,14 +51,22 @@ def build_container(settings: Settings, *, device_lister: Optional[Callable] = N
     users, sessions, cameras = UserRepository(db), SessionRepository(db), CameraRepository(db)
     camera_service = CameraService(cameras, box, device_lister or list_v4l2_devices)
     detector = detector or Detector(settings.model_path, settings.conf_threshold, settings.seg_model_path)
+    flow_repo = FlowRepository(db)
+    flow_writer = FlowWriter(flow_repo, settings)
+    registry = HubRegistry(settings, detector, flow_sink=flow_writer.submit)   # hubs só enfileiram; quem grava é o escritor
+    zones = ZoneService(ZoneRepository(db), camera_service, settings)
     return Container(
         settings=settings,
         db=db,
         auth=AuthService(users, sessions,
                          LoginThrottle(settings.login_fail_limit, settings.login_fail_window_s), settings),
         cameras=camera_service,
-        zones=ZoneService(ZoneRepository(db), camera_service, settings),
+        zones=zones,
         recognition=RecognitionService(cameras, camera_service, settings),
         detector=detector,
-        registry=HubRegistry(settings, detector),
+        registry=registry,
+        flow=FlowService(flow_repo, camera_service, settings),
+        flow_writer=flow_writer,
+        monitor=MonitorService(cameras, camera_service),
+        scheduler=MonitorScheduler(cameras, camera_service, zones, registry, settings),
     )

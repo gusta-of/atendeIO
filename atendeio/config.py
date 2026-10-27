@@ -37,6 +37,17 @@ class Settings:
     max_cameras: int = 12            # pipelines simultâneos no servidor
     max_cameras_per_user: int = 4    # câmeras simultâneas por utilizador
     first_frame_timeout_s: float = 12.0
+    # monitoramento contínuo + histórico de fluxo (só números agregados, nunca imagens)
+    monitor_fps: float = 1.0          # ritmo da inferência quando NINGUÉM assiste o vídeo
+    monitor_tick_s: float = 30.0      # de quanto em quanto o monitor confere as câmeras monitoradas
+    flow_flush_s: float = 15.0        # descarrega as amostras agregadas no banco a cada tanto
+    flow_minute_days: int = 30        # retenção da resolução de minuto
+    flow_hour_days: int = 730         # retenção da resolução de hora
+    timezone: str = "America/Sao_Paulo"  # fuso do restaurante: dia/hora das análises
+    # logs ao vivo (depuração): nunca podem pesar na aplicação
+    log_events_per_s: float = 10.0    # orçamento por conexão; o excedente é descartado e resumido
+    log_frame_hz: float = 2.0         # quadros detalhados, no máx. por segundo
+    log_history: int = 200
     # áreas do salão (ver analytics/zones.py)
     max_zones_per_camera: int = 50
     occupy_after_s: float = 3.0
@@ -70,6 +81,11 @@ class Settings:
             session_ttl_s=int(_env("SESSION_TTL", str(cls.session_ttl_s))),
             max_fps=float(_env("MAX_FPS", str(cls.max_fps))),
             occlusion=_env("OCCLUSION", "1") == "1",
+            monitor_fps=float(_env("MONITOR_FPS", str(cls.monitor_fps))),
+            timezone=_env("TIMEZONE", cls.timezone),
+            flow_minute_days=int(_env("FLOW_MINUTE_DAYS", str(cls.flow_minute_days))),
+            flow_hour_days=int(_env("FLOW_HOUR_DAYS", str(cls.flow_hour_days))),
+            log_events_per_s=float(_env("LOG_EVENTS_PER_S", str(cls.log_events_per_s))),
             occupy_after_s=float(_env("OCCUPY_AFTER", str(cls.occupy_after_s))),
             free_after_s=float(_env("FREE_AFTER", str(cls.free_after_s))),
             clean_after_s=float(_env("CLEAN_AFTER", str(cls.clean_after_s))),

@@ -17,6 +17,13 @@ def index(request: Request):
     return FileResponse(get_container(request).settings.static_dir / "index.html")
 
 
+@router.get("/analytics")
+def analytics_page(request: Request):
+    if not _authed(request):
+        return RedirectResponse("/login", status_code=303)
+    return FileResponse(get_container(request).settings.static_dir / "analytics.html")
+
+
 @router.get("/login")
 def login_page(request: Request):
     if _authed(request):

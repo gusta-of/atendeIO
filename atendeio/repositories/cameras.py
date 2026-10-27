@@ -44,6 +44,16 @@ class CameraRepository:
             return c.execute("UPDATE cameras SET recognition=?, classes=? WHERE id=? AND user_id=?",
                              (1 if enabled else 0, json.dumps(classes), cam_id, user_id)).rowcount > 0
 
+    def update_monitor(self, cam_id: int, user_id: int, enabled: bool, from_: Optional[str], to: Optional[str]) -> bool:
+        with closing(self._db.connect()) as c, c:
+            return c.execute("UPDATE cameras SET monitor=?, monitor_from=?, monitor_to=? WHERE id=? AND user_id=?",
+                             (1 if enabled else 0, from_ or None, to or None, cam_id, user_id)).rowcount > 0
+
+    def list_monitored(self) -> list:
+        """Todas as câmeras com monitoramento ligado (de todos os utilizadores): é o agendador do servidor que usa."""
+        with closing(self._db.connect()) as c:
+            return [dict(r) for r in c.execute("SELECT * FROM cameras WHERE monitor=1 ORDER BY id")]
+
     def local_refs(self, *, owned_by: Optional[int] = None, not_owned_by: Optional[int] = None) -> set:
         sql, args = "SELECT ref FROM cameras WHERE kind='local'", []
         if owned_by is not None:

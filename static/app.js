@@ -183,6 +183,9 @@ function makeTile(cam) {
   const swRec = h("button", { class: "switch sm", type: "button", role: "switch", "aria-checked": "true",
     title: "Liga/desliga o reconhecimento de objetos nesta câmera",
     onclick: (ev) => { ev.stopPropagation(); toggleRecognition(cam.id); } }, h("span", { class: "switch-knob" }));
+  const swMon = h("button", { class: "switch sm", type: "button", role: "switch", "aria-checked": "false",
+    title: "Monitoramento contínuo: analisa a câmera o dia todo, mesmo sem ninguém olhando, para a análise de fluxo",
+    onclick: (ev) => { ev.stopPropagation(); toggleMonitor(cam.id); } }, h("span", { class: "switch-knob" }));
   const btnObjects = h("button", { class: "btn mini", type: "button", title: "Escolher quais objetos reconhecer",
     onclick: (ev) => { ev.stopPropagation(); editRecognition(cam.id); } }, "Objetos");
   const el = h("div", { class: "tile", tabindex: "0" },
@@ -192,6 +195,7 @@ function makeTile(cam) {
         onclick: (ev) => { ev.stopPropagation(); toggleCamera(cam.id); } }, "×")),
     h("div", { class: "tile-tools" },
       h("label", { class: "rec-sw" }, swRec, h("span", { text: "Reconhecer" })), btnObjects,
+      h("label", { class: "rec-sw" }, swMon, h("span", { text: "Monitorar" })),
       tgAreas, tgBoxes,
       h("button", { class: "btn mini", title: "Marcar mesas e áreas", type: "button",
         onclick: (ev) => { ev.stopPropagation(); editZones(cam.id); } }, "Editar áreas"),
@@ -199,7 +203,7 @@ function makeTile(cam) {
         onclick: (ev) => { ev.stopPropagation(); LogsWindow.open({ cam }); } }, "Logs")),
     box, chips);
   const tile = { el, img, meta, chips, msg, box, frame, overlay, retryTimer: null, retryDelay: 1000,
-    id: cam.id, ar: 16 / 9, size: null, zones: [], areas: new Map(), sig: "", view, tgAreas, tgBoxes, swRec, btnObjects,
+    id: cam.id, ar: 16 / 9, size: null, zones: [], areas: new Map(), sig: "", view, tgAreas, tgBoxes, swRec, btnObjects, swMon,
     rec: { enabled: true, classes: [] } };
   tile.ro = new ResizeObserver(() => fitTile(tile));
   tile.ro.observe(box);
@@ -211,6 +215,7 @@ function makeTile(cam) {
   img.addEventListener("error", () => onTileError(tile));
   loadZones(tile);
   loadRecognition(tile);
+  loadMonitor(tile);
   return tile;
 }
 
@@ -431,6 +436,27 @@ async function saveRecognition(tile, rec) {
   paintRecognition(tile);
   hallSig = "";
   try { await pollOnce(); } catch (_) {}
+}
+
+/* ── Monitoramento contínuo (alimenta a análise de fluxo) ───── */
+
+async function loadMonitor(tile) {
+  try { tile.mon = await api(`/api/cameras/${tile.id}/monitor`); } catch (_) { tile.mon = { enabled: false }; }
+  tile.swMon.setAttribute("aria-checked", String(!!tile.mon.enabled));
+}
+
+async function toggleMonitor(camId) {
+  const tile = tiles.get(camId);
+  if (!tile) return;
+  const next = !(tile.mon && tile.mon.enabled);
+  try {
+    tile.mon = await api(`/api/cameras/${camId}/monitor`, { method: "PUT",
+      body: { enabled: next, from: (tile.mon && tile.mon.from) || "", to: (tile.mon && tile.mon.to) || "" } });
+    tile.swMon.setAttribute("aria-checked", String(!!tile.mon.enabled));
+    if (tile.mon.enabled && confirm("Monitoramento ligado: a câmera será analisada o dia todo, mesmo com o painel fechado.\n\nQuer ver a análise de fluxo agora?")) {
+      location.href = `/analytics?camera=${camId}`;
+    }
+  } catch (e) { alert(e.message); }   // ex.: falta marcar "Pessoa" em Objetos
 }
 
 async function toggleRecognition(camId) {

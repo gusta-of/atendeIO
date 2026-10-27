@@ -110,7 +110,7 @@ def test_frame_events_exist_only_for_detail_listeners_and_are_never_buffered():
 
 def test_slow_listener_drops_oldest_and_counts():
     async def go():
-        bus = EventBus(1)
+        bus = EventBus(1, rate=0)                      # sem orçamento: aqui o que se testa é o estouro da fila
         sub, _ = bus.subscribe(asyncio.get_running_loop())
         for i in range(1500):                         # fila do ouvinte é de 1000
             bus.emit("change", "x", {"i": i})
@@ -151,15 +151,15 @@ def test_sse_stream_sends_backlog_heartbeat_dropped_notice_and_stops_with_the_hu
         async for chunk in sse.events_stream(hub, sub, backlog, still, recheck_every_s=999, heartbeat_s=0.05):
             out.append(chunk.decode())
             if len(out) == 4:                                  # retry + backlog + 2 heartbeats
-                sub.dropped = 3                                # simula ouvinte que ficou pra trás
-            if any("events.dropped" in c for c in out):
+                sub.add_dropped(3)                             # simula ouvinte que ficou pra trás
+            if any("events.throttled" in c for c in out):
                 hub.stop_event.set()                           # câmera removida: o stream termina sozinho
         return out
     out = asyncio.run(go())
     assert out[0] == "retry: 3000\n\n"
     assert out[1].startswith("id: 1\nevent: change") and "hub.started" in out[1]
     assert ": ping\n\n" in out
-    dropped = next(c for c in out if "events.dropped" in c)
+    dropped = next(c for c in out if "events.throttled" in c)
     assert '"count":3' in dropped and "id:" not in dropped    # aviso do canal: sem id (não entra no buffer)
 
 
@@ -235,10 +235,10 @@ def test_hub_builds_frame_detail_only_while_a_detail_listener_exists(container, 
         assert _wait(lambda: hub.events.wants_detail())
         got = []
 
-        async def drain():
-            for _ in range(3):
+        async def until_frame():
+            while not any(e["type"] == "frame" for e in got):      # quadros são amostrados (2/s): espera até chegar um
                 got.append(await asyncio.wait_for(sub.queue.get(), 5))
-        loop.run_until_complete(drain())
+        loop.run_until_complete(until_frame())
         frames = [e for e in got if e["type"] == "frame"]
         assert frames and frames[0]["data"]["detections"][0]["class"] == "person"
         assert frames[0]["data"]["size"] == [320, 240]

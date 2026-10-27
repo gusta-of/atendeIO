@@ -8,12 +8,32 @@ def _hub(container, cam_id, owner, src):
 
 
 def test_hub_produces_jpeg_and_inventory(container, video_file):
+    import asyncio
+    hub = _hub(container, 1, 10, video_file)
+    loop = asyncio.new_event_loop()
+    try:
+        assert hub.ready.wait(10)
+        st = hub.snapshot_state()
+        assert st["total"] == 1 and st["online"] and st["viewers"] == 1 and st["people"] == 1  # a análise roda sem vídeo
+        assert hub.last_jpeg(False)[:2] != b"\xff\xd8"                                            # ...mas sem JPEG nenhum
+        q = hub.subscribe(loop, boxes=False, areas=False)                                          # alguém abre o vídeo
+        frame = loop.run_until_complete(asyncio.wait_for(q.get(), 5))
+        assert frame[:2] == b"\xff\xd8"                                                           # JPEG
+        assert hub.last_jpeg(False)[:2] == b"\xff\xd8"
+    finally:
+        loop.close()
+        container.registry.release(hub)
+        container.registry.stop_all()
+
+
+def test_nothing_is_encoded_while_nobody_watches_the_video(container, video_file):
+    import time
     hub = _hub(container, 1, 10, video_file)
     try:
         assert hub.ready.wait(10)
-        assert hub.last_jpeg(False)[:2] == b"\xff\xd8"  # JPEG
-        st = hub.snapshot_state()
-        assert st["total"] == 1 and st["online"] and st["viewers"] == 1 and st["people"] == 1
+        time.sleep(0.5)
+        assert hub.last_jpeg(False) == b"" and hub.areas_encodes == 0 and hub.boxed_encodes == 0
+        assert hub.snapshot_state()["people"] == 1                       # a análise segue funcionando
     finally:
         container.registry.release(hub)
         container.registry.stop_all()

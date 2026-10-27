@@ -1,4 +1,4 @@
-"""HubRegistry: ciclo de vida dos hubs (abre no 1º espectador, libera quando ocioso)."""
+"""HubRegistry: ciclo de vida dos hubs (abre no 1º espectador ou pelo monitoramento; libera quando ocioso)."""
 
 import threading
 import time
@@ -12,32 +12,84 @@ from .hub import CameraHub
 
 
 class HubRegistry:
-    def __init__(self, settings: Settings, detector: Detector):
-        self._cfg, self._detector = settings, detector
+    def __init__(self, settings: Settings, detector: Detector, flow_sink: Optional[Callable[[dict], object]] = None):
+        self._cfg, self._detector, self._flow_sink = settings, detector, flow_sink
         self._hubs: dict = {}  # cam_id -> CameraHub
+        self._zombies: list = []
         self._lock = threading.Lock()
+
+    def _new_hub(self, cam_id, owner_id, get_source, zones, enabled, classes) -> CameraHub:
+        hub = CameraHub(cam_id, owner_id, get_source, self._detector, self._cfg, zones, enabled, classes,
+                        self._flow_sink)
+        self._hubs[cam_id] = hub
+        hub.start()
+        return hub
+
+    def _live(self, cam_id: int):
+        """O hub da câmera se estiver de pé. Um hub cujas threads morreram é um zumbi: sai do registro (o chamador
+        o para fora do lock) e quem pediu recebe um novo."""
+        hub = self._hubs.get(cam_id)
+        if hub is not None and not hub.alive:
+            del self._hubs[cam_id]
+            self._zombies.append(hub)
+            return None
+        return hub
+
+    def _reap_zombies(self) -> None:
+        zs, self._zombies = self._zombies, []
+        for z in zs:
+            z.stop()
+            print(f"[!] câmera {z.cam_id}: pipeline parado inesperadamente, reiniciando")
 
     def acquire(self, cam_id: int, owner_id: int, get_source: Callable,
                 zones: Iterable[Zone] = (), enabled: bool = True,
                 classes: Optional[frozenset] = None) -> CameraHub:
         with self._lock:
-            hub = self._hubs.get(cam_id)
+            hub = self._live(cam_id)
             if hub is None:
                 mine = sum(1 for h in self._hubs.values() if h.owner_id == owner_id and h.viewers > 0)
                 if len(self._hubs) >= self._cfg.max_cameras or mine >= self._cfg.max_cameras_per_user:
+                    self._reap_zombies()
                     raise RateLimitError("Limite de câmeras simultâneas atingido.")
-                hub = CameraHub(cam_id, owner_id, get_source, self._detector, self._cfg, zones, enabled, classes)
-                self._hubs[cam_id] = hub
-                hub.start()
+                hub = self._new_hub(cam_id, owner_id, get_source, zones, enabled, classes)
                 print(f"[*] câmera {cam_id} iniciada")
             hub.viewers += 1
-            return hub
+        self._reap_zombies()
+        return hub
+
+    # -- monitoramento contínuo: o hub fica de pé SEM contar como espectador -----------------------
+    def hold(self, cam_id: int, owner_id: int, get_source: Callable, zones: Iterable[Zone] = (),
+             enabled: bool = True, classes: Optional[frozenset] = None) -> CameraHub:
+        """Garante o hub de uma câmera monitorada (cria, ou recria se morreu). Respeita o teto global."""
+        with self._lock:
+            hub = self._live(cam_id)
+            if hub is None:
+                if len(self._hubs) >= self._cfg.max_cameras:
+                    self._reap_zombies()
+                    raise RateLimitError("Limite de câmeras simultâneas atingido.")
+                hub = self._new_hub(cam_id, owner_id, get_source, zones, enabled, classes)
+                print(f"[*] câmera {cam_id} em monitoramento contínuo")
+            hub.monitor = True
+        self._reap_zombies()
+        return hub
+
+    def unhold(self, cam_id: int) -> None:
+        """Fim do monitoramento (desligado ou fora do horário): o hub segue o ciclo normal e some se ficar ocioso."""
+        with self._lock:
+            hub = self._hubs.get(cam_id)
+            if hub is not None and hub.monitor:
+                hub.monitor = False
+                hub.idle_since = time.monotonic()
 
     def release(self, hub: CameraHub) -> None:
         with self._lock:
             hub.viewers = max(0, hub.viewers - 1)
             if hub.viewers == 0:
                 hub.idle_since = time.monotonic()
+
+    def count(self) -> int:
+        with self._lock:
+            return len(self._hubs)
 
     def get(self, cam_id: int) -> Optional[CameraHub]:
         with self._lock:
@@ -76,7 +128,7 @@ class HubRegistry:
         now = time.monotonic()
         with self._lock:
             dead = [k for k, h in self._hubs.items()
-                    if h.viewers == 0 and now - h.idle_since > self._cfg.idle_ttl_s]
+                    if h.viewers == 0 and not h.monitor and now - h.idle_since > self._cfg.idle_ttl_s]
             hubs = [self._hubs.pop(k) for k in dead]
         for h in hubs:
             h.stop()
