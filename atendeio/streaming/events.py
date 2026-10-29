@@ -96,9 +96,11 @@ class Subscriber:
 
 class EventBus:
     def __init__(self, camera_id: int, history: int = HISTORY, clock: Callable[[], float] = time.time,
-                 rate: float = 10.0):
+                 rate: float = 10.0, tap: Optional[Callable[[dict], None]] = None):
+        """`tap(evento)` recebe cada evento `change` (o envio à cloud). Não pode bloquear nem levantar."""
         self.camera_id = camera_id
         self._rate = rate
+        self._tap = tap
         self._ring = deque(maxlen=history)
         self._subs: List[Subscriber] = []
         self._seq = 0
@@ -123,6 +125,9 @@ class EventBus:
         for s in targets:
             with contextlib.suppress(RuntimeError):  # loop do ouvinte já fechou
                 s.loop.call_soon_threadsafe(s._put, ev)
+        if self._tap is not None and type_ == "change":
+            with contextlib.suppress(Exception):  # o envio à cloud nunca pode atrapalhar a câmera
+                self._tap(ev)
         return ev
 
     def wants_detail(self) -> bool:

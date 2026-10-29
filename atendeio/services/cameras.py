@@ -1,14 +1,13 @@
 """Câmeras: cadastro RTSP/local, listagem e resolução da fonte — sempre por dono."""
 
 import json
-import os
 import re
 from typing import Callable
 
 from ..errors import NotFoundError, ValidationError
 from ..repositories.cameras import CameraRepository
 from ..security import SecretBox
-from ..vision.sources import list_v4l2_devices, open_source
+from ..vision.sources import list_v4l2_devices, local_source, open_source
 from . import rtsp
 
 
@@ -73,7 +72,7 @@ class CameraService:
     def source_for(self, cam: dict):
         """O que o OpenCV abre. Contém credenciais: só usar dentro do servidor."""
         if cam["kind"] == "local":
-            return os.path.realpath(cam["ref"])  # /dev/videoN atual do id estável
+            return local_source(cam["ref"])  # /dev/videoN (Linux) ou índice DirectShow (Windows), atuais
         host, port, path = rtsp.parse_ref(cam["ref"])
         rtsp.check_host(host)  # reconfere a cada abertura (DNS pode ter mudado)
         sec = json.loads(self._box.decrypt(cam["secret"]))

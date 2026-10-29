@@ -1,14 +1,25 @@
 """Configuração: uma dataclass imutável lida das variáveis de ambiente."""
 
 import os
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+from atendeio import paths
+
+ROOT = paths.ROOT
 
 
 def _env(name: str, default: str) -> str:
     return os.environ.get(f"ATENDEIO_{name}", default)
+
+
+# Caminhos calculados na instanciação (não na importação): o executável e os testes os resolvem no momento.
+def _static_dir() -> Path:
+    return paths.resource_dir() / "static"                     # frontend antigo (convive até a virada)
+
+
+def _frontend_dir() -> Path:
+    return paths.resource_dir() / "frontend" / "www"           # frontend novo (Ionic/Angular compilado)
 
 
 @dataclass(frozen=True)
@@ -17,11 +28,11 @@ class Settings:
     host: str = "127.0.0.1"
     port: int = 8000
     # armazenamento
-    static_dir: Path = ROOT / "static"                      # frontend antigo (convive até a virada)
-    frontend_dir: Path = ROOT / "frontend" / "www"           # frontend novo (Ionic/Angular compilado)
-    data_dir: Path = ROOT / "data"
-    model_path: Path = ROOT / "yolov8n.pt"
-    seg_model_path: Path = ROOT / "yolov8n-seg.pt"  # silhuetas (oclusão das áreas); baixa sozinho na 1ª vez
+    static_dir: Path = field(default_factory=_static_dir)
+    frontend_dir: Path = field(default_factory=_frontend_dir)
+    data_dir: Path = field(default_factory=paths.data_dir)
+    model_path: Path = field(default_factory=lambda: paths.resource_dir() / "yolov8n.pt")
+    seg_model_path: Path = field(default_factory=lambda: paths.resource_dir() / "yolov8n-seg.pt")  # silhuetas; no executável vêm incluídas
     secret_key: str = ""  # Fernet; vazio => gera em data/secret.key
     # autenticação
     allow_signup: bool = True
@@ -47,6 +58,13 @@ class Settings:
     flow_minute_days: int = 30        # retenção da resolução de minuto
     flow_hour_days: int = 730         # retenção da resolução de hora
     timezone: str = "America/Sao_Paulo"  # fuso do restaurante: dia/hora das análises
+    # envio de eventos à cloud (ver streaming/uploader.py)
+    cloud_batch_size: int = 100        # eventos por pedido
+    cloud_timeout_s: float = 10.0
+    cloud_snapshot_every_s: float = 300.0   # retrato completo de cada câmera, para a cloud se recuperar de perdas
+    cloud_backoff_max_s: float = 300.0
+    cloud_outbox_max: int = 50_000     # com a cloud fora do ar, descarta os eventos mais antigos além disto
+    cloud_rejected_keep_s: float = 7 * 24 * 3600.0
     # logs ao vivo (depuração): nunca podem pesar na aplicação
     log_events_per_s: float = 10.0    # orçamento por conexão; o excedente é descartado e resumido
     log_frame_hz: float = 2.0         # quadros detalhados, no máx. por segundo
@@ -77,8 +95,8 @@ class Settings:
         s = cls(
             host=_env("HOST", cls.host),
             port=int(_env("PORT", str(cls.port))),
-            data_dir=Path(_env("DATA", str(cls.data_dir))),
-            frontend_dir=Path(_env("FRONTEND_DIR", str(cls.frontend_dir))),
+            data_dir=Path(_env("DATA", str(paths.data_dir()))),
+            frontend_dir=Path(_env("FRONTEND_DIR", str(_frontend_dir()))),
             secret_key=_env("SECRET_KEY", ""),
             allow_signup=_env("ALLOW_SIGNUP", "1") == "1",
             cookie_secure=_env("COOKIE_SECURE", "0") == "1",

@@ -41,6 +41,12 @@
 
 > ⚠️ Em um servidor **compartilhado por vários restaurantes** e com VPN para as redes deles, permitir redes privadas deixa um utilizador cadastrar o IP da câmera de outro. Para multi-restaurante é necessário isolar por túnel/tabela de rotas ou lista de IPs permitidos por conta. Não existe hoje. Ver [07-deploy.md](07-deploy.md).
 
+## Envio à cloud
+
+A chave do dispositivo fica criptografada (Fernet) e nunca é devolvida pela API; o endereço exige HTTPS (HTTP só em
+loopback); o envio não segue redirecionamentos; o envelope não leva imagens, URLs nem credenciais de câmera. Detalhes e
+limites em [10-envio-para-cloud.md](10-envio-para-cloud.md#segurança).
+
 ## Service worker e dados
 
 O service worker (`frontend/ngsw-config.json`) guarda **somente a casca** (HTML/JS/CSS/ícones). **Nunca** `/api`, `/stream` nem eventos: nenhum dado autenticado fica em cache de SW. A última lista de câmeras/usuário fica em `localStorage` para abrir offline e é **apagada no logout**.

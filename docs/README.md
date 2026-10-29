@@ -12,6 +12,8 @@ Ponto de partida para qualquer pessoa ou agente que assuma o projeto. Leia na or
 | 6 | [06-api.md](06-api.md) | Referência dos endpoints HTTP |
 | 7 | [07-deploy.md](07-deploy.md) | HTTPS, VPS, VPN com câmeras do restaurante, mini-PC local |
 | 8 | [08-estado-e-pendencias.md](08-estado-e-pendencias.md) | O que está pronto, o que não foi verificado, decisões, próximos passos |
+| 9 | [09-executavel-standalone.md](09-executavel-standalone.md) | Executável Windows instalado no cliente: decisões, build, migração de dados |
+| 10 | [10-envio-para-cloud.md](10-envio-para-cloud.md) | Contrato de eventos, outbox e envio dos metadados à cloud |
 
 O `README.md` da raiz continua sendo a documentação de **uso** (funcionalidades vistas pelo utilizador). Esta pasta é a
 documentação **de engenharia**: como o sistema é construído e por quê.
@@ -30,7 +32,11 @@ documentação **de engenharia**: como o sistema é construído e por quê.
 
 ```
 app.py                  atalho para `python -m atendeio`
+launcher.py             entrada do executável Windows (ver 09-executavel-standalone.md)
+atendeio.spec           receita do PyInstaller
 atendeio/               backend (ver 02-arquitetura.md)
+  desktop.py            janela, bandeja e servidor do executável
+  paths.py              recursos (só leitura) vs. dados (%APPDATA% no executável)
   api/                  rotas, schemas, middleware, deps
   analytics/            geometria, rastreador, mesas, fluxo (puro, testável)
   services/             regras de negócio
@@ -41,7 +47,8 @@ atendeio/               backend (ver 02-arquitetura.md)
   config.py             Settings (variáveis ATENDEIO_*)
 frontend/               app Ionic + Angular (ver 04-frontend.md)
 static/                 painel ANTIGO (JS/HTML/CSS puro), ainda servido em /
-scripts/                add_user.py, dev_demo.py, seed_flow.py
+schemas/                contrato JSON Schema dos eventos enviados à cloud (ver 10-envio-para-cloud.md)
+scripts/                add_user.py, dev_demo.py, seed_flow.py, build_windows.ps1, migrar_dados.py
 deploy/                 Caddyfile.example
 tests/                  pytest (backend) + tests/js (matemática das formas do painel antigo)
 docs/                   esta documentação

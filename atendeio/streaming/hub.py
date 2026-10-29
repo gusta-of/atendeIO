@@ -38,10 +38,14 @@ def _put_latest(q: asyncio.Queue, item) -> None:
 class CameraHub:
     def __init__(self, cam_id: int, owner_id: int, get_source: Callable, detector: Detector,
                  settings: Settings, zones: Iterable[Zone] = (), enabled: bool = True,
-                 classes: Optional[frozenset] = None, flow_sink: Optional[Callable[[dict], object]] = None):
+                 classes: Optional[frozenset] = None, flow_sink: Optional[Callable[[dict], object]] = None,
+                 cloud_sink: Optional[Callable[[str, int, int, object], None]] = None):
         """`get_source()` é chamado a cada (re)conexão: credenciais não ficam em atributo.
-        `flow_sink(lote)` recebe o histórico de fluxo agregado (nunca bloqueia: é a fila do FlowWriter)."""
+        `flow_sink(lote)` recebe o histórico de fluxo agregado (nunca bloqueia: é a fila do FlowWriter).
+        `cloud_sink(tipo, câmera, dono, dado)` recebe eventos `change` ("change") e lotes de fluxo ("flow") para a
+        cloud; só enfileira, nunca bloqueia."""
         self.cam_id, self.owner_id = cam_id, owner_id
+        self._cloud_sink = cloud_sink
         self.monitor = False          # monitoramento contínuo: o hub fica de pé mesmo sem ninguém assistindo
         self._wake = threading.Event()  # acorda a espera entre quadros (novo espectador, parada)
         self._flow = FlowAggregator(cam_id, settings.flow_flush_s)
@@ -72,7 +76,8 @@ class CameraHub:
         self.fps = 0.0
 
         # Telemetria em JSON, em tempo real (ver streaming/events.py)
-        self.events = EventBus(cam_id, history=settings.log_history, rate=settings.log_events_per_s)
+        self.events = EventBus(cam_id, history=settings.log_history, rate=settings.log_events_per_s,
+                               tap=self._tap_change if cloud_sink else None)
         self._last_frame_evt = 0.0
         self._prev_state = None
         self._prev_counts = None
@@ -263,6 +268,9 @@ class CameraHub:
         if self._flow.due(ts):
             self._flush_flow(ts)
 
+    def _tap_change(self, ev: dict) -> None:
+        self._cloud_sink("change", self.cam_id, self.owner_id, ev)
+
     def _flush_flow(self, ts: Optional[float] = None) -> None:
         batch = self._flow.flush(ts)
         if batch and self._flow_sink:
@@ -270,6 +278,11 @@ class CameraHub:
                 self._flow_sink(batch)   # só enfileira; quem grava é a thread escritora
             except Exception as e:
                 print(f"[-] histórico de fluxo da câmera {self.cam_id}: {type(e).__name__}")
+        if batch and self._cloud_sink:
+            try:
+                self._cloud_sink("flow", self.cam_id, self.owner_id, batch)
+            except Exception as e:
+                print(f"[-] envio de fluxo da câmera {self.cam_id}: {type(e).__name__}")
 
     def _build_state(self, dets: list, shape, now: float) -> dict:
         """Inventário por classe, pessoas na área da câmera e análise das áreas do utilizador."""

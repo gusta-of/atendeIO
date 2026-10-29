@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from ..config import Settings
 from ..container import Container, build_container
 from . import errors, middleware
-from .routes import auth, cameras, events, flow, health, pages, recognition, spa, stream, tickets, zones
+from .routes import auth, cameras, cloud, events, flow, health, pages, recognition, spa, stream, tickets, zones
 
 
 def create_app(settings: Optional[Settings] = None, container: Optional[Container] = None) -> FastAPI:
@@ -39,6 +39,7 @@ def create_app(settings: Optional[Settings] = None, container: Optional[Containe
                     print(f"[!] laço de eventos atrasou {delay:.0f} ms: algo está bloqueando a aplicação")
 
         container.flow_writer.start()
+        container.exporter.start()
         container.scheduler.start()
         tasks = [asyncio.create_task(reaper()), asyncio.create_task(sentinel())]
         try:
@@ -48,6 +49,7 @@ def create_app(settings: Optional[Settings] = None, container: Optional[Containe
                 t.cancel()
             container.scheduler.stop()
             container.registry.stop_all()      # cada hub entrega o histórico que sobrou ao escritor...
+            container.exporter.stop()          # ...e os eventos pendentes à outbox (sem esperar pela rede)...
             container.flow_writer.stop()       # ...que grava tudo antes de sair
 
     # Sem /docs nem /openapi.json: o painel não precisa expor o esquema da API.
@@ -62,6 +64,6 @@ def create_app(settings: Optional[Settings] = None, container: Optional[Containe
                            allow_methods=["GET", "POST", "PUT", "DELETE"],
                            allow_headers=["Authorization", "Content-Type", "Last-Event-ID"])
     errors.install(app)
-    for module in (pages, auth, cameras, zones, recognition, stream, events, tickets, flow, health, spa):
+    for module in (pages, auth, cameras, zones, recognition, stream, events, tickets, flow, health, cloud, spa):
         app.include_router(module.router)
     return app

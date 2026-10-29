@@ -9,6 +9,7 @@ from typing import Callable, Optional
 from .config import Settings
 from .db import Database
 from .repositories.cameras import CameraRepository
+from .repositories.cloud import CloudConfigRepository, OutboxRepository
 from .repositories.flow import FlowRepository
 from .repositories.sessions import SessionRepository
 from .repositories.zones import ZoneRepository
@@ -16,6 +17,7 @@ from .repositories.users import UserRepository
 from .security import SecretBox
 from .services.auth import AuthService
 from .services.cameras import CameraService
+from .services.cloud import CloudService
 from .services.flow import FlowService
 from .services.monitor import MonitorScheduler, MonitorService
 from .services.recognition import RecognitionService
@@ -24,6 +26,7 @@ from .services.zones import ZoneService
 from .services.throttle import LoginThrottle
 from .streaming.flow_writer import FlowWriter
 from .streaming.registry import HubRegistry
+from .streaming.uploader import CloudExporter
 from .vision.detector import Detector
 from .vision.sources import list_v4l2_devices
 
@@ -39,6 +42,8 @@ class Container:
     flow: FlowService
     tickets: TicketService
     flow_writer: FlowWriter
+    cloud: CloudService
+    exporter: CloudExporter
     monitor: MonitorService
     scheduler: MonitorScheduler
     detector: Detector
@@ -46,7 +51,7 @@ class Container:
 
 
 def build_container(settings: Settings, *, device_lister: Optional[Callable] = None,
-                    detector: Optional[Detector] = None) -> Container:
+                    detector: Optional[Detector] = None, cloud_post: Optional[Callable] = None) -> Container:
     db = Database(settings.db_path)
     db.init()
     box = SecretBox(settings.secret_key, settings.key_path)
@@ -55,7 +60,12 @@ def build_container(settings: Settings, *, device_lister: Optional[Callable] = N
     detector = detector or Detector(settings.model_path, settings.conf_threshold, settings.seg_model_path)
     flow_repo = FlowRepository(db)
     flow_writer = FlowWriter(flow_repo, settings)
-    registry = HubRegistry(settings, detector, flow_sink=flow_writer.submit)   # hubs só enfileiram; quem grava é o escritor
+    cloud = CloudService(CloudConfigRepository(db), box)
+    exporter_kwargs = {"post": cloud_post} if cloud_post else {}
+    exporter = CloudExporter(cloud, OutboxRepository(db), cameras.get_for_user,
+                             lambda: registry.all_states(), settings, **exporter_kwargs)
+    # hubs só enfileiram (fluxo no escritor, eventos no exportador); quem grava e envia são as threads deles
+    registry = HubRegistry(settings, detector, flow_sink=flow_writer.submit, cloud_sink=exporter.submit)
     zones = ZoneService(ZoneRepository(db), camera_service, settings)
     return Container(
         settings=settings,
@@ -70,6 +80,8 @@ def build_container(settings: Settings, *, device_lister: Optional[Callable] = N
         flow=FlowService(flow_repo, camera_service, settings),
         tickets=TicketService(box.derive("media-tickets"), settings.ticket_ttl_s),
         flow_writer=flow_writer,
+        cloud=cloud,
+        exporter=exporter,
         monitor=MonitorService(cameras, camera_service),
         scheduler=MonitorScheduler(cameras, camera_service, zones, registry, settings),
     )

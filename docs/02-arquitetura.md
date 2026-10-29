@@ -15,7 +15,7 @@ analytics/      geometria, rastreador, estado das mesas e histórico de fluxo (p
 services/       regras de negócio (auth, câmeras, RTSP, áreas, fluxo, monitor, tíquetes); sem HTTP, sem SQL
 repositories/   SQL puro; toda consulta de câmera é filtrada por dono
 vision/         YOLO (Detector), inventário (puro), abertura de fontes (OpenCV), desenho
-streaming/      CameraHub (1 pipeline por câmera), HubRegistry, MJPEG, eventos/SSE, FlowWriter
+streaming/      CameraHub (1 pipeline por câmera), HubRegistry, MJPEG, eventos/SSE, FlowWriter, CloudExporter
 container.py    composition root: monta tudo; sem singletons globais
 config.py       Settings imutável (env) · errors.py erros de domínio · security.py hash/Fernet
 ```
@@ -70,6 +70,8 @@ Pontos importantes:
 | `flow_minute` | pessoas por minuto (`samples`, soma, máx, mín); retenção 30 dias |
 | `flow_hour` | pessoas por hora; retenção 730 dias |
 | `flow_area_hour` | pessoas por área por hora |
+| `cloud_config` | uma linha: envio ligado, endereço, chave do dispositivo (criptografada), `device_id` |
+| `outbox` | eventos à espera de confirmação da cloud (ver [10-envio-para-cloud.md](10-envio-para-cloud.md)) |
 
 - Chaves de tempo em UTC (`epoch // 60`, `epoch // 3600`); o fuso (`ATENDEIO_TIMEZONE`) entra só na consulta.
 - Uma câmera local só pode ter um dono (índice único); RTSP é único por (utilizador, `ref`).
@@ -79,6 +81,12 @@ Pontos importantes:
 ## Fluxo de dados históricos
 
 `CameraHub` → amostras agregadas → **`FlowWriter`** (única thread que grava) a cada `flow_flush_s` (15 s). A fila é limitada: se o disco travar, os lotes mais antigos são descartados e a câmera nem percebe. `GET /api/health` expõe o atraso do laço de eventos (acima de ~200 ms algo está bloqueando) e contadores do escritor.
+
+## Eventos para a cloud
+
+`CloudExporter` (`streaming/uploader.py`) é, como o `FlowWriter`, a única thread que faz I/O lento: os hubs só entregam
+eventos `change` (pelo `tap` do `EventBus`) e lotes de fluxo a uma fila limitada. Ele grava na `outbox` e envia por HTTPS.
+Contrato, falhas e segurança em [10-envio-para-cloud.md](10-envio-para-cloud.md).
 
 ## Servir frontend
 

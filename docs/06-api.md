@@ -57,6 +57,13 @@ Todas as rotas `/api/*` exigem sessão (cookie `atendeio_session` **ou** `Author
 | `GET /flow.csv` | Exportação em CSV (mesmos filtros). |
 | `GET /monitor`, `PUT /monitor` | Liga/desliga o monitoramento contínuo e a janela `HH:MM`–`HH:MM`. Exige reconhecimento ligado com **Pessoa** marcada. |
 
+## Envio à cloud (`/api/cloud`)
+
+| Método e rota | Descrição |
+|---|---|
+| `GET /api/cloud` | `{enabled, url, key_set, device_id, status{state, pending, rejected, last_ok, last_error, sent, dropped}}`. Nunca devolve a chave. |
+| `PUT /api/cloud` | `{enabled, url, api_key?}`. HTTPS obrigatório (HTTP só em loopback). Sem `api_key` mantém a guardada. Vale na hora. |
+
 ## Saúde
 
 | Método e rota | Descrição |

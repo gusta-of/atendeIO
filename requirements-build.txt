@@ -1,0 +1,4 @@
+# Dependências para gerar o executável Windows (scripts/build_windows.ps1).
+# Não são necessárias para correr a aplicação a partir do código-fonte.
+-r requirements.txt
+pyinstaller

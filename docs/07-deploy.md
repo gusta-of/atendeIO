@@ -8,6 +8,9 @@
 | **B. VPS na nuvem + VPN até o restaurante** | só RTSP | Acesso de qualquer lugar sem equipamento no local além de um dispositivo de túnel. |
 | **C. A + acesso remoto** (A com Tailscale/Cloudflare Tunnel) | USB e RTSP | Servidor no local e dono acessa de fora. Evita o upload do vídeo para a nuvem. |
 
+**D. Executável no PC do cliente** (branch `Standalone`): USB e RTSP, sem servidor nem proxy, só em `127.0.0.1`. É o
+cenário-alvo do produto; ver [09-executavel-standalone.md](09-executavel-standalone.md).
+
 Câmera **USB não funciona em VPS**. RTSP atrás de NAT precisa de VPN: **nunca exponha a porta 554 da câmera na internet**.
 
 ## HTTPS (obrigatório para PWA e apps nativos)

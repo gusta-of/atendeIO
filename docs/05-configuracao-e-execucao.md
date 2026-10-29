@@ -30,6 +30,16 @@ pnpm test               # Vitest
 pnpm run lint
 ```
 
+## Executável Windows
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build_windows.ps1   # dist\atendeIO\atendeIO.exe + zip
+python -m atendeio.desktop                                         # mesma janela, a partir do código-fonte
+```
+
+Node 24+ é obrigatório para o build do frontend (o Angular CLI recusa o Node 22). Detalhes, decisões e migração de dados
+em [09-executavel-standalone.md](09-executavel-standalone.md).
+
 ## Demonstração sem hardware
 
 ```bash
@@ -63,7 +73,7 @@ Definidas em `atendeio/config.py` (`Settings.from_env`). Os valores entre parên
 | Variável | Efeito |
 |---|---|
 | `HOST` (127.0.0.1), `PORT` (8000) | Onde o servidor escuta. Atrás de proxy, mantenha loopback. |
-| `DATA` (`./data`) | Pasta do banco (`atendeio.db`) e da chave (`secret.key`). |
+| `DATA` (`./data`; no executável `%APPDATA%\atendeIO`) | Pasta do banco (`atendeio.db`) e da chave (`secret.key`). |
 | `SECRET_KEY` | Chave Fernet. Vazia = gera `data/secret.key`. **Guarde: sem ela as credenciais RTSP ficam ilegíveis.** |
 | `ALLOW_SIGNUP` (1) | `0` desliga o cadastro público. |
 | `COOKIE_SECURE` (0) | `1` atrás de HTTPS (obrigatório em produção). |

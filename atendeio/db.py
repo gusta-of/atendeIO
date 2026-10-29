@@ -64,6 +64,23 @@ CREATE TABLE IF NOT EXISTS flow_area_hour (
     samples INTEGER NOT NULL, people_sum INTEGER NOT NULL, people_max INTEGER NOT NULL,
     PRIMARY KEY (camera_id, zone_id, hour)
 ) WITHOUT ROWID;
+-- Envio à cloud: configuração (uma linha só) e fila de saída. Só eventos e números, nunca imagens.
+CREATE TABLE IF NOT EXISTS cloud_config (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    enabled INTEGER NOT NULL DEFAULT 0,
+    url TEXT NOT NULL DEFAULT '',
+    api_key BLOB,                            -- chave do dispositivo, criptografada (Fernet)
+    device_id TEXT NOT NULL                  -- identifica esta instalação; gerado na 1ª abertura
+);
+CREATE TABLE IF NOT EXISTS outbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,    -- a ordem de envio é a ordem de gravação
+    event_id TEXT NOT NULL UNIQUE,
+    created REAL NOT NULL,
+    payload TEXT NOT NULL,                   -- JSON do envelope (schemas/atendeio-event-1.json)
+    state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'rejected')),
+    attempts INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS outbox_state_id ON outbox(state, id);
 -- uma câmera física só pode ter um dono
 CREATE UNIQUE INDEX IF NOT EXISTS cameras_local_ref ON cameras(ref) WHERE kind = 'local';
 CREATE UNIQUE INDEX IF NOT EXISTS cameras_rtsp_ref ON cameras(user_id, ref) WHERE kind = 'rtsp';

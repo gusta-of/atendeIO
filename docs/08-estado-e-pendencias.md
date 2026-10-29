@@ -7,6 +7,7 @@
 1. `atendeIO mvp`: backend FastAPI + YOLO, painel antigo em `static/`, multiutilizador, áreas, mesas.
 2. `gera estatisticas`: monitoramento contínuo, histórico de fluxo, página de Análise.
 3. `Integração IONIC + Angular…`: novo frontend (`frontend/`), PWA, auth por token + tíquetes, Capacitor Android/iOS.
+4. Branch `Standalone` (em curso): executável Windows com PyInstaller. Ver [09-executavel-standalone.md](09-executavel-standalone.md).
 
 ## O que está pronto
 
@@ -48,6 +49,13 @@
 5. Gerar APK/IPA em máquina com Android Studio/Xcode; avaliar Keychain/Keystore para o token.
 6. Se for vender para **vários restaurantes**: isolamento de rede por cliente (ver 07-deploy.md), possivelmente organização/loja como entidade (hoje só existe `users`), e revisão de limites por conta.
 7. Alterar `atendeio/config.py` (`max_fps` 5) está *staged* e sem commit.
+8. **Executável (`Standalone`):** build gerado (`dist\atendeIO`, ~820 MB) e 204 testes verdes. Falta verificar o
+   executável aberto (janela, bandeja, arranque com o Windows, webcam USB real, service worker no WebView2) e testá-lo
+   numa máquina sem Python.
+9. **Cloud:** receber os metadados do executável (Supabase + front-end TypeScript na Vercel). Projeto separado. O lado do
+   executável está feito: contrato, outbox e envio com retry, 242 testes verdes ([10-envio-para-cloud.md](10-envio-para-cloud.md)).
+   Falta o ecrã de configuração no app Ionic (hoje só `PUT /api/cloud`) e rever o contrato com a cloud.
+10. Rebuild do executável para incluir o envio à cloud (o `dist/` atual é anterior).
 
 ## Ideias fora do escopo atual
 

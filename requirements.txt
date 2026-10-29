@@ -10,3 +10,11 @@ uvicorn==0.54.0
 
 # Segurança: criptografia das credenciais RTSP em repouso
 cryptography==50.0.2
+
+# Fuso horário do restaurante (America/Sao_Paulo): o Windows não tem base de fusos própria
+tzdata
+
+# Executável Windows (só instalado no Windows): janela própria, ícone na bandeja, webcams USB por nome
+pywebview; sys_platform == "win32"
+pystray; sys_platform == "win32"
+pygrabber; sys_platform == "win32"

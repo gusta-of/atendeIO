@@ -39,3 +39,9 @@ class ZonesRequest(BaseModel):
 class RecognitionRequest(BaseModel):
     enabled: StrictBool = True
     classes: List[StrictInt] = Field(default_factory=list, max_length=80)
+
+
+class CloudRequest(BaseModel):
+    enabled: StrictBool = False
+    url: str = Field(default="", max_length=300)
+    api_key: Optional[str] = Field(default=None, max_length=512)   # None = mantém a chave guardada

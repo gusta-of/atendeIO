@@ -1,4 +1,9 @@
 .venv/
+.venv-build/
 __pycache__/
 data/
 .pytest_cache/
+# executável Windows (scripts/build_windows.ps1)
+build/
+dist/
+*.spec.bak

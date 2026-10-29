@@ -3,12 +3,20 @@
 Dois modelos da mesma família: o de detecção (leve, usado sempre) e o de segmentação (devolve também a
 silhueta de cada objeto; só entra quando as áreas precisam ficar "atrás" de quem está na frente)."""
 
+import os
 import threading
 from pathlib import Path
 from typing import Optional
 
 import cv2
 import numpy as np
+
+from .. import paths
+
+# Sem rede no executável: o Ultralytics não descarrega nada (pesos já vêm incluídos) nem envia telemetria.
+# `setdefault`: quem for desenvolver pode sobrepor estas variáveis no ambiente.
+os.environ.setdefault("YOLO_OFFLINE", "1")
+os.environ.setdefault("YOLO_CONFIG_DIR", str(paths.data_dir() / "ultralytics"))
 
 POLY_MAX_POINTS = 40
 

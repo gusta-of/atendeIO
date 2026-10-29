@@ -12,15 +12,17 @@ from .hub import CameraHub
 
 
 class HubRegistry:
-    def __init__(self, settings: Settings, detector: Detector, flow_sink: Optional[Callable[[dict], object]] = None):
+    def __init__(self, settings: Settings, detector: Detector, flow_sink: Optional[Callable[[dict], object]] = None,
+                 cloud_sink: Optional[Callable[[str, int, int, object], None]] = None):
         self._cfg, self._detector, self._flow_sink = settings, detector, flow_sink
+        self._cloud_sink = cloud_sink
         self._hubs: dict = {}  # cam_id -> CameraHub
         self._zombies: list = []
         self._lock = threading.Lock()
 
     def _new_hub(self, cam_id, owner_id, get_source, zones, enabled, classes) -> CameraHub:
         hub = CameraHub(cam_id, owner_id, get_source, self._detector, self._cfg, zones, enabled, classes,
-                        self._flow_sink)
+                        self._flow_sink, self._cloud_sink)
         self._hubs[cam_id] = hub
         hub.start()
         return hub
@@ -100,6 +102,12 @@ class HubRegistry:
         with self._lock:
             hubs = [h for h in self._hubs.values() if h.owner_id == owner_id]
         return {h.cam_id: h.snapshot_state() for h in hubs}
+
+    def all_states(self) -> list:
+        """[(câmera, dono, estado)] de todos os hubs de pé. Uso interno do envio à cloud (nunca exposto por HTTP)."""
+        with self._lock:
+            hubs = list(self._hubs.values())
+        return [(h.cam_id, h.owner_id, h.snapshot_state()) for h in hubs]
 
     def set_zones(self, cam_id: int, zones: Iterable[Zone]) -> None:
         """Aplica as áreas editadas à câmera ao vivo (se não estiver ao vivo, o próximo acquire carrega)."""

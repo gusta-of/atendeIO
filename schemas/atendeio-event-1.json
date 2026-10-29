@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atendeio.local/schemas/atendeio-event-1.json",
+  "title": "atendeIO event v1",
+  "description": "Um evento enviado pelo executável do restaurante à cloud. Nunca contém imagens, URLs de câmera nem credenciais.",
+  "type": "object",
+  "required": ["schema", "event_id", "device_id", "occurred_at", "type", "data"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": { "const": "atendeio.event/1" },
+    "event_id": { "type": "string", "format": "uuid", "description": "Chave de idempotência: a cloud ignora um event_id que já recebeu." },
+    "device_id": { "type": "string", "format": "uuid", "description": "Instalação do executável (gerado na primeira abertura)." },
+    "occurred_at": { "type": "string", "format": "date-time", "description": "UTC, quando aconteceu (não quando foi enviado)." },
+    "camera": {
+      "type": "object",
+      "required": ["id", "name"],
+      "additionalProperties": false,
+      "properties": { "id": { "type": "integer" }, "name": { "type": "string" } }
+    },
+    "type": {
+      "enum": ["table.status_changed", "table.cleaned", "area.people_changed", "camera.status_changed", "flow.batch", "state.snapshot"]
+    },
+    "data": { "type": "object" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "const": "table.status_changed" } } },
+      "then": {
+        "required": ["camera"],
+        "properties": { "data": {
+          "type": "object",
+          "required": ["zone_id", "name", "from", "to", "people"],
+          "additionalProperties": false,
+          "properties": {
+            "zone_id": { "type": "integer" },
+            "name": { "type": "string" },
+            "from": { "enum": ["livre", "ocupada", "a_limpar", null] },
+            "to": { "enum": ["livre", "ocupada", "a_limpar"] },
+            "people": { "type": "integer", "minimum": 0 }
+          }
+        } }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "table.cleaned" } } },
+      "then": {
+        "required": ["camera"],
+        "properties": { "data": {
+          "type": "object",
+          "required": ["zone_id", "name"],
+          "additionalProperties": false,
+          "properties": { "zone_id": { "type": "integer" }, "name": { "type": ["string", "null"] } }
+        } }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "area.people_changed" } } },
+      "then": {
+        "required": ["camera"],
+        "properties": { "data": {
+          "type": "object",
+          "required": ["zone_id", "name", "kind", "from", "to"],
+          "additionalProperties": false,
+          "properties": {
+            "zone_id": { "type": "integer" },
+            "name": { "type": "string" },
+            "kind": { "enum": ["mesa", "balcao", "entrada", "saida", "fila", "area"] },
+            "from": { "type": ["integer", "null"] },
+            "to": { "type": ["integer", "null"] }
+          }
+        } }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "camera.status_changed" } } },
+      "then": {
+        "required": ["camera"],
+        "properties": { "data": {
+          "type": "object",
+          "required": ["online"],
+          "additionalProperties": false,
+          "properties": { "online": { "type": "boolean" }, "reason": { "type": ["string", "null"] } }
+        } }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "flow.batch" } } },
+      "then": {
+        "required": ["camera"],
+        "properties": { "data": {
+          "type": "object",
+          "description": "Soma parcial: a cloud ACUMULA (samples e people_sum somam; people_max é o máximo; people_min é o mínimo) por chave. Cada lote é aplicado uma só vez graças ao event_id.",
+          "required": ["minutes", "hours", "areas"],
+          "additionalProperties": false,
+          "properties": {
+            "minutes": { "type": "array", "items": { "$ref": "#/$defs/bucket_minute" } },
+            "hours": { "type": "array", "items": { "$ref": "#/$defs/bucket_hour" } },
+            "areas": { "type": "array", "items": { "$ref": "#/$defs/bucket_area" } }
+          }
+        } }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "state.snapshot" } } },
+      "then": {
+        "required": ["camera"],
+        "properties": { "data": {
+          "type": "object",
+          "description": "Retrato completo da câmera, enviado de tempos a tempos. Permite à cloud recuperar o estado se perdeu eventos.",
+          "required": ["online", "people", "areas"],
+          "additionalProperties": false,
+          "properties": {
+            "online": { "type": "boolean" },
+            "people": { "type": ["integer", "null"] },
+            "areas": { "type": "array", "items": { "$ref": "#/$defs/area_state" } }
+          }
+        } }
+      }
+    }
+  ],
+  "$defs": {
+    "bucket_minute": {
+      "type": "object", "additionalProperties": false,
+      "required": ["minute", "samples", "people_sum", "people_max", "people_min"],
+      "properties": {
+        "minute": { "type": "integer", "description": "epoch // 60 (UTC)" },
+        "samples": { "type": "integer" }, "people_sum": { "type": "integer" },
+        "people_max": { "type": "integer" }, "people_min": { "type": "integer" }
+      }
+    },
+    "bucket_hour": {
+      "type": "object", "additionalProperties": false,
+      "required": ["hour", "samples", "people_sum", "people_max", "people_min"],
+      "properties": {
+        "hour": { "type": "integer", "description": "epoch // 3600 (UTC)" },
+        "samples": { "type": "integer" }, "people_sum": { "type": "integer" },
+        "people_max": { "type": "integer" }, "people_min": { "type": "integer" }
+      }
+    },
+    "bucket_area": {
+      "type": "object", "additionalProperties": false,
+      "required": ["zone_id", "hour", "name", "kind", "samples", "people_sum", "people_max"],
+      "properties": {
+        "zone_id": { "type": "integer" }, "hour": { "type": "integer" },
+        "name": { "type": "string" }, "kind": { "type": "string" },
+        "samples": { "type": "integer" }, "people_sum": { "type": "integer" }, "people_max": { "type": "integer" }
+      }
+    },
+    "area_state": {
+      "type": "object", "additionalProperties": false,
+      "required": ["zone_id", "name", "kind", "people"],
+      "properties": {
+        "zone_id": { "type": "integer" }, "name": { "type": "string" }, "kind": { "type": "string" },
+        "status": { "enum": ["livre", "ocupada", "a_limpar"] },
+        "people": { "type": "integer", "minimum": 0 },
+        "seconds": { "type": ["number", "null"], "description": "Há quanto tempo está neste estado." }
+      }
+    }
+  }
+}
