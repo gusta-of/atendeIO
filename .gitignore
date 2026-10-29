@@ -1,4 +1,79 @@
+# ── Python ───────────────────────────────────────────────────────────────────
 .venv/
+venv/
 __pycache__/
-data/
+*.py[cod]
+*.egg-info/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ── Dados locais e segredos (nunca no git) ───────────────────────────────────
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+secret.key
+*.key
+*.pem
+*.p12
+*.pfx
+.env
+.env.*
+!.env.example
+*.log
+
+# ── Modelos (pesados; o YOLO baixa/exporta sozinho, o CI gera os do instalador) ──
+*.pt
+*.onnx
+*.engine
+
+# ── Empacotamento e instaladores (gerados) ────────────────────────────────────
+/build/
+/dist/
+*.spec
+*.exe
+*.msi
+*.dmg
+*.AppImage
+*.deb
+
+# ── Node (desktop/, web/ e frontend/) ───────────────────────────────────────────
+node_modules/
+.angular/
+.pnpm-store/
+npm-debug.log*
+yarn-error.log*
+/web/www/
+/web/www-desktop/
+/web/www-native/
+/frontend/www/
+/frontend/www-desktop/
+/frontend/www-native/
+/desktop/dist/
+/desktop/engine-dist/
+/desktop/engine-build/
+
+# ── Android / iOS gerados pelo Capacitor ────────────────────────────────────────
+**/android/**/build/
+**/android/.gradle/
+**/android/local.properties
+**/android/app/src/main/assets/public/
+**/ios/App/Pods/
+**/ios/App/build/
+**/ios/DerivedData/
+
+# ── Editores, sistema e ferramentas ───────────────────────────────────────────
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+*.swp
+*~
+.DS_Store
+Thumbs.db
+.claude/
