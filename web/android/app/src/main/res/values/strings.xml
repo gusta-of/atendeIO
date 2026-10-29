@@ -1,7 +1,0 @@
-<?xml version='1.0' encoding='utf-8'?>
-<resources>
-    <string name="app_name">atendeIO</string>
-    <string name="title_activity_main">atendeIO</string>
-    <string name="package_name">com.atendeio.app</string>
-    <string name="custom_url_scheme">com.atendeio.app</string>
-</resources>
