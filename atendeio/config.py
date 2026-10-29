@@ -39,7 +39,7 @@ class Settings:
     login_fail_limit: int = 5
     login_fail_window_s: int = 600
     # visão / streaming
-    conf_threshold: float = 0.45
+    conf_threshold: float = 0.55    # Valor de confianca para identificar objetos
     max_fps: float = 5.0            # teto de inferência por câmera
     idle_ttl_s: float = 30.0         # libera a câmera sem espectadores
     jpeg_quality: int = 75
