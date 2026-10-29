@@ -213,7 +213,7 @@ def test_map_reads_walking_people_with_a_stable_id_and_faster_than_monitoring(se
         first = c.map_snapshot()["states"][cid]["tracks"][0]
         assert wait(lambda: c.map_snapshot()["states"][cid]["tracks"] and c.map_snapshot()["states"][cid]["tracks"][0]["x"] > first["x"] + 0.1)
         later = c.map_snapshot()["states"][cid]["tracks"][0]
-        assert later["id"] == first["id"] and abs(later["y"] - 0.8) < 1e-6     # mesmo id; "y" = os pés (base da caixa)
+        assert later["id"] == first["id"] and abs(later["y"] - 0.8) < 1e-6 and abs(later["h"] - 0.5) < 1e-6 and later["full"] is True     # mesmo id; "y" = os pés (base da caixa)
         assert c.c.registry.get(cid).fps > 3.0                                  # ritmo do mapa, não o 1 fps do monitor
     finally:
         c.stop()

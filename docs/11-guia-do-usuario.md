@@ -90,7 +90,7 @@ Os limites (padrão: 2 min a limpar, 3 min ou 5 pessoas na fila) mudam em **Aler
 Os botões **Pessoas** e **Rastros** na barra ligam e desligam (a escolha é lembrada). Com o mapa aberto, as câmeras são lidas a **4 quadros/s** (`ATENDEIO_MAP_FPS`) para o movimento ficar fluido.
 Sem calibração a posição é **aproximada** (a imagem é uma perspectiva, não uma planta). Para ficar fiel, **calibre o chão** da câmera: selecione a câmera no mapa → **Calibrar chão** → clique no vídeo os **4 cantos do chão** que quer mapear, **em qualquer ordem** (o app descobre qual é o fundo).
 Pode clicar **na área escura, fora da imagem**, para incluir o chão que a câmera não mostra por inteiro. Arraste um ponto para ajustar. Depois informe o tamanho real desse chão em metros: **largura** (de um lado ao outro) e **profundidade** (do fundo até a frente) → **Salvar**.
-Pessoas e áreas daquela câmera passam a respeitar a perspectiva (útil em câmeras altas ou inclinadas). **Remover calibração** volta ao aproximado. A mesma pessoa vista por duas câmeras aparece **duas vezes**.
+Com o chão calibrado, o app também **aprende o tamanho das pessoas** que passam pela câmera e usa isso para colocar cada **mesa pela base dela** (o polígono é desenhado no tampo); nos primeiros minutos, andar um pouco pela câmera ajuda. Pessoas e áreas daquela câmera passam a respeitar a perspectiva (útil em câmeras altas ou inclinadas). **Remover calibração** volta ao aproximado. A mesma pessoa vista por duas câmeras aparece **duas vezes**.
 Nada é gravado: o rastro existe só na memória e some ao fechar o mapa.
 
 **Resumo por câmera:** o painel lateral lista cada câmera com status, pessoas, mesas e FPS; **Ver câmera** abre o cartão dela.

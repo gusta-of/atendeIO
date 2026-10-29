@@ -1,3 +1,5 @@
+import pytest
+
 from atendeio.app.people_model import PeopleSmoother
 from atendeio.app import map_model as M
 
