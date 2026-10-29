@@ -61,8 +61,8 @@ def test_ranges_are_always_ordered_and_inside_the_allowed_limits():
 
 
 def test_gpu_is_informational_only():
-    assert any("placa de vídeo não é usada" in n for n in H.recommend(info(gpu="NVIDIA X"), 20).notes)
-    assert not any("placa de vídeo" in n for n in H.recommend(info(gpu=None), 20).notes)
+    assert any("Placa de vídeo é opcional" in n for n in H.recommend(info(gpu="NVIDIA X"), 20).notes)
+    assert not any("Placa de vídeo é opcional" in n for n in H.recommend(info(gpu=None), 20).notes)
 
 
 def test_detect_returns_sane_values_on_this_machine():

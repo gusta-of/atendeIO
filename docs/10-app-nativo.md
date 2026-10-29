@@ -40,6 +40,9 @@ atendeio/
     bridge.py                   thread do pipeline → sinal Qt (quadro BGR → QImage)
     theme.py                    tema escuro (QSS)
     labels.py, format.py        rótulos/cores do Salão e formatação pt-BR (porta de area-labels.ts / format.ts)
+    iso.py                      projeção isométrica/oblíqua 2.5D (sem Qt)
+    map_model.py                modelo do mapa: zonas, blocos, cores, alertas, resumo por câmera, clique (sem Qt)
+    prefs.py                    ÚNICA porta de entrada das preferências (QSettings em INI)
     shapes.py                   matemática das formas (porta de shapes.ts)
     zone_editor_model.py        lógica do editor de áreas (sem Qt)
     log_events.py               buffer da janela de logs: filtro, busca, anel, NDJSON (sem Qt)
@@ -55,6 +58,8 @@ atendeio/
       zone_editor.py            editor de áreas (QPainter + mouse)
       logs_window.py            janela de logs (lista virtualizada)
       analytics_page.py         Análise de fluxo (filtros, KPIs, cartões de gráfico, CSV)
+      map_page.py               Mapa do ambiente: página, painel lateral, alertas, mini histórico
+      map_view.py               vista isométrica 2.5D desenhada com QPainter
       charts.py                 gráficos desenhados com QPainter
       icons.py                  engrenagem e lápis desenhados em código
   hardware.py                   detecta o hardware, mede o YOLO e recomenda FPS (sem Qt)
@@ -102,6 +107,21 @@ A camada `atendeio/api/` (FastAPI) e `static/`, `web/`, `desktop/` pertencem à 
 - **Encerramento limpo** por "Sair" na bandeja, `Ctrl+C` ou `SIGTERM`: o monitor solta os hubs, cada hub entrega o histórico, o escritor grava e o cofre de credenciais é esquecido.
 - **F11** alterna tela cheia de verdade; a janela abre **maximizada**.
 
+### 4.4 Layout responsivo e cartão estático
+
+O cartão de cada câmera **nunca muda de tamanho com o conteúdo**: só a largura da janela o altera.
+
+| Largura útil do cartão | Arranjo |
+|---|---|
+| ≥ 1080 px (monitor grande) | **vídeo à esquerda e informações à direita**; o painel tem a **mesma altura do vídeo** e largura de 380–480 px |
+| < 1080 px | **informações embaixo** do vídeo, com altura fixa de 300 px |
+
+O painel do Salão também é responsivo: com ≥ 640 px de largura mostra **duas colunas** (mesas e áreas | pessoas e objetos); mais estreito, empilha as duas.
+As listas (mesas/áreas e **objetos reconhecidos**) ficam em **áreas de rolagem de altura constante** (`ScrollList`): quando um objeto novo aparece
+ou some, só uma linha entra/sai lá dentro, a caixa não cresce nem encolhe, e a posição da rolagem é preservada a cada atualização.
+Objetos aparecem **em português** (`labels.object_label`: `person` → Pessoa) e em **ordem estável** (mais frequentes primeiro, empate em ordem alfabética).
+Código: `camera_tile.py` (`_relayout`), `hall_panel.py` (`HallPanel`, `ScrollList`).
+
 ## 5. Telas e funções (paridade com a versão web)
 
 | Função | Onde |
@@ -116,6 +136,7 @@ A camada `atendeio/api/` (FastAPI) e `static/`, `web/`, `desktop/` pertencem à 
 | Análise de fluxo (KPIs, insights, hora, mapa de calor, dia a dia, curva do dia, áreas, tabela, CSV) | `analytics_page.py` + `charts.py` + `charts/models.py` |
 | Monitoramento com horário de funcionamento | Análise e edição da câmera |
 | Configurações: FPS por câmera + hardware | engrenagem → `settings_dialog.py` |
+| **Mapa do ambiente** (visão isométrica 2.5D em tempo real, alertas, resumo por câmera) | `map_page.py`, `map_view.py`, `map_model.py`, `iso.py` |
 | Credenciais RTSP sob demanda | `UnlockDialog` |
 | Login/cadastro por senha | **n/a** (dono local único; a conta virá com a nuvem) |
 | PWA, instalar, offline, tela de servidor | **n/a** (é um app nativo) |
@@ -123,6 +144,39 @@ A camada `atendeio/api/` (FastAPI) e `static/`, `web/`, `desktop/` pertencem à 
 **Atalhos do editor de áreas:** `V` selecionar · `R` retângulo · `Q` quadrado · `C` círculo · `T` triângulo · `P` polígono ·
 `Esc` cancela/desmarca/fecha · `Enter` fecha o polígono · `Backspace` apaga o último ponto · `Delete` exclui a área ·
 `[` `]` giram 5° (com Shift, 15°) · Shift ao arrastar canto mantém a proporção; Shift ao girar trava em 15°.
+
+## 5.1 Mapa do ambiente
+
+Tela-resumo para **não ficar nas telas das câmeras**: uma **imagem sintética em tempo real** (sem o vídeo) do ambiente, em **3D leve**
+(isométrico 2.5D, `QPainter`, sem GPU), com os dados de cada área e o mapeamento geral por câmera.
+
+```
+AppCore.map_snapshot() ──► map_model.build_scene() ──► Scene (zonas, blocos, alertas, resumo) ──► IsoMapView.paintEvent
+   (câmeras, áreas, estados)      puro, testável              iso.Projector (yaw, pitch, escala)        QPainter
+```
+
+- **Zonas e blocos.** Cada câmera vira uma **zona** (retângulo `aspect × 1`) e as áreas aparecem onde estão na imagem dela, extrudadas por tipo
+  (mesa 0,10 · balcão 0,22 · entrada/saída 0,28 e transparentes · fila 0,03 · área 0,02). A **cor** é o estado (livre/ocupada/a limpar, cinza "sem leitura",
+  cinza-azulado "fora do ar"). Rótulo de duas linhas (nome; estado · pessoas · tempo). **A vista de cima é aproximada:** a imagem da câmera é uma
+  perspectiva, não uma planta; arrastar e redimensionar a zona compensa. (Calibração por 4 pontos no chão é evolução futura.)
+- **Projeção** (`iso.py`): `x' = x·cos(yaw) − y·sin(yaw)`, `y' = x·sin(yaw) + y·cos(yaw)`, `sx = x'·s`, `sy = (y'·sin(pitch) − z·cos(pitch))·s`. Órbita livre
+  (**sem movimento 3D pelo mouse**: o ângulo vem de um **slider** de pitch 22°–86° que preserva o ponto central da tela; botões ⟲ ⟳ giram 30°); presets **Isométrico** (yaw 45°, pitch 35,26°) e **De cima** (pitch 86°). Faces laterais só as voltadas
+  para o observador, desenho de trás para frente (`map_model.ordered_blocks`: empate de profundidade → o menor por cima); **o clique usa a mesma ordem**.
+- **Alertas** (`AlertRules`, editáveis em "Alertas…", salvos em `prefs`): mesa **a limpar** há > 2 min (aviso) / > 5 min (crítico); **fila** com espera > 3 min ou ≥ 5 pessoas
+  (aviso) / > 6 min ou ≥ 8 (crítico); **câmera fora do ar**, **aguardando senha** ou **limite de câmeras**. Selo "!" no bloco (o crítico pisca), lista lateral clicável, contagem no topo.
+- **Resumo geral por câmera:** status (ao vivo / conectando / fora do ar / aguardando senha / limite), pessoas, mesas livres/ocupadas/a limpar, FPS, alertas; e totais gerais.
+- **Detalhe ao clicar** numa área: estado, pessoas, tempo e **mini histórico** (média e pico por hora, 7 dias) de `FlowService.area_profile` sobre `flow_area_hour`.
+  Clicar numa zona de câmera mostra o resumo dela; **Ver câmera** abre o cartão; **Zona +/−** (ou Ctrl+roda) muda o tamanho da zona.
+- **Interação:** **arrastar desloca** o mapa (só translação); **clicar** seleciona (clique no vazio limpa); **a roda é só zoom**; o modo **Mover zonas** (desligado por padrão) faz o arraste
+  sobre uma zona de câmera mover a zona. Tamanho da zona: botões **Zona +/−** do painel lateral.
+- **Seleção:** o mapa mostra e lê **somente as câmeras marcadas na lista lateral** (`MainWindow.selected_camera_ids()` → `MapPage.set_cameras` → `AppCore.map_select`); desmarcar solta a câmera na hora
+  (se não for monitorada). O vídeo dos cartões só roda na página Câmeras (`MainWindow._go`).
+- **Layout:** automático (2 zonas por linha, sem sobrepor) até o utilizador **arrastar** uma zona; aí posição e escala ficam salvas **por câmera** (`map_layout`, apagadas com a câmera). **Reorganizar** volta ao automático.
+- **Leitura enquanto o mapa está aberto:** `AppCore.map_enter(ids)` prende as câmeras **selecionadas** (`HubRegistry.pin_for_map`) no **FPS de monitoramento** (sem gerar vídeo); **não contam como
+  espectador** (não gastam o limite por utilizador) mas respeitam o teto global `max_cameras` (a que não couber aparece como "limite de câmeras"); câmera RTSP sem senha é ignorada.
+  `map_leave()` solta o que o mapa prendeu: as **monitoradas ou assistidas continuam**, as outras são liberadas pelo coletor. Janela oculta/minimizada também solta.
+- **Responsivo:** painel lateral ao lado (≥ 980 px de página) ou embaixo; a barra de ferramentas tem **duas linhas** e a legenda/dica quebram linha (mínimo da janela ~1050 px ao lado, ~870 px embaixo).
+- Custo medido (Linux, YOLO real, 1 câmera): ~13% de um núcleo; câmera liberada ~4 s depois de sair.
 
 ## 6. Editar a configuração de uma câmera
 
@@ -149,7 +203,7 @@ olhando). "Padrão" = `ATENDEIO_MAX_FPS` (5) e `ATENDEIO_MONITOR_FPS` (1). Ficam
 (NULL = padrão), são validados em `CameraService.set_fps` e **valem na hora** com a câmera ligada (`CameraHub.set_fps`).
 
 **Recomendação** (botão da engrenagem ou `scripts/recommend_fps.py`; lógica em `atendeio/hardware.py`):
-1. Detecta sistema, processador, núcleos, memória e placa de vídeo (só informativa: a análise roda na CPU).
+1. Detecta sistema, processador, núcleos, memória e placa de vídeo (só informativa).
 2. **Mede o YOLO de verdade** (mediana de ~10 quadros). A inferência é serializada, então `1000 / ms` = capacidade total em quadros/s.
 3. Orçamento = 70% da capacidade (folga para captura, interface, banco e sistema).
 4. Monitoramento: faixa até 5 fps, sugerido 1 (reduzido se a máquina está no limite). Ao assistir: o que sobra depois de monitorar
@@ -163,16 +217,25 @@ python scripts/recommend_fps.py --no-benchmark  # só estima (não carrega o mod
 python scripts/recommend_fps.py --json          # saída para outras ferramentas
 ```
 
+## 7.1 Aceleração por hardware (o que existe e o que não existe)
+
+- **Interface:** widgets Qt desenhados em **software** (`QPainter`); não depende de GPU e não usa processo de GPU. (O `--disable-gpu` era do Electron, que saiu.)
+- **Reconhecimento (YOLO):** `vision/detector.py` **não define `device`**. O Ultralytics escolhe sozinho: CUDA se o PyTorch for de GPU e houver placa
+  NVIDIA; Apple MPS em Mac com Apple Silicon; senão **CPU**. Nesta máquina (placa AMD, sem CUDA) roda na CPU. No instalador previsto
+  (PyTorch só de CPU) será CPU em todo lugar. **Não há opção na interface para escolher o dispositivo.**
+- A medição de hardware roda o detector real, então **reflete o que a sua máquina realmente usa** (inclusive uma GPU, se o PyTorch a usar).
+- **Pendente para máquinas fracas:** ONNX Runtime (menos memória, mais rápido em CPU), limitar threads do PyTorch, reduzir `imgsz` (resolução da inferência) e uma opção "Dispositivo" nas Configurações.
+
 ## 8. Dados e configuração
 
 | O quê | Onde (Linux; Windows e macOS seguem o `QStandardPaths` do Qt, ainda não verificados) |
 |---|---|
 | Banco, chave Fernet | `~/.local/share/atendeIO/atendeIO/data/` (`atendeio.db`, `secret.key`); `ATENDEIO_DATA` troca |
-| Preferências da interface (`QSettings`) | `~/.config/atendeIO/atendeIO.conf` — filtros da Análise (`an/*`) e posição da janela de logs (`logwin/<id>`) |
+| Preferências da interface | `~/.config/atendeIO/atendeIO.ini` (via `app/prefs.py`) — filtros da Análise (`an/*`), janela de logs (`logwin/<id>`), limiares dos alertas do mapa (`map/alert_*`) |
 | Arquivo de trava | pasta de dados do app (`atendeio.lock`) |
 
 **Banco (SQLite):** `users` (só o dono local), `sessions` (não usada pelo nativo), `cameras` (nome, tipo, `ref` sem credenciais,
-reconhecimento, classes, monitor, `fps_view`, `fps_monitor`), `zones`, `flow_minute`, `flow_hour`, `flow_area_hour`. Migrações leves
+reconhecimento, classes, monitor, `fps_view`, `fps_monitor`), `zones`, `map_layout` (posição/escala da zona de cada câmera no mapa), `flow_minute`, `flow_hour`, `flow_area_hour`. Migrações leves
 em `Database._migrate` (colunas novas por `ALTER TABLE`, sem perder dados).
 
 **Perfil econômico** (`resources.py`): com menos de 6 GB de RAM o motor desliga a segmentação (`OCCLUSION=0`), limita a 3 câmeras e usa
@@ -208,7 +271,7 @@ JPEG 65. Qualquer variável `ATENDEIO_*` explícita vence.
 
 - **Gráficos com `QPainter`**, não `QtCharts` (GPL/comercial). **`opencv-python-headless`**: o `opencv-python` traz plugins Qt próprios que brigam com o PySide6. **`PySide6-Essentials`** (LGPL).
 - **Portas do web, mesma matemática:** `shapes.ts`→`shapes.py`, `chart-models.ts`→`charts/models.py`, `format.ts`→`format.py`, `area-labels.ts`→`labels.py`, `log-event.ts`→`log_events.py`; os testes dos `.spec.ts` viraram pytest.
-- **Preferências isoladas nos testes** (`QSettings` em pasta temporária): um teste chegou a gravar na configuração real do utilizador e quebrar o seguinte.
+- **Preferências SEMPRE por `app/prefs.py`** (`QSettings` em INI): `QSettings("org","app")` usa o formato nativo e escapa do isolamento dos testes (`setPath(IniFormat, …)`); um teste de regressão garante que os testes nunca tocam a configuração real. O arquivo agora é `atendeIO.ini`.
 - **Testes encerram o que ligam** (fixture autouse em `tests/conftest.py`): câmeras e threads vazadas disputavam CPU e derrubavam testes de tempo só na rodada completa.
 - **Detector**: hoje o YOLO via `torch` (~1 GB de RAM). A troca por **ONNX Runtime** está planejada (fica toda em `vision/detector.py`).
 

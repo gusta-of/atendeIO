@@ -485,3 +485,408 @@ def test_main_window_reopens_the_tile_after_editing(qapp, core, video_file, monk
     assert win._tiles[cam].cam["name"] == "Depois"                         # o cartão foi refeito com a configuração nova
     assert "Depois" in win.list.item(0).text()
     win.quit_app()
+
+
+def _seed_state(n_objects: int, people=1, zones=True):
+    names = ["person", "chair", "cup", "bottle", "bowl", "fork", "knife", "spoon", "wine glass", "laptop", "cell phone", "book"]
+    return {"people": people, "size": [640, 360], "recognition": {"enabled": True, "classes": 5, "person": True},
+            "counts": [{"name": n, "count": 1 + i % 4} for i, n in enumerate(names[:n_objects])],
+            "areas": [{"id": 1, "name": "Mesa 1", "kind": "mesa", "status": "ocupada", "people": people, "seconds": 12}]}
+
+
+def test_hall_panel_never_changes_size_when_objects_appear_or_disappear(qapp):
+    from atendeio.app.ui.hall_panel import HallPanel
+
+    panel = HallPanel("Salão")
+    panel.set_zones([{"id": 1, "name": "Mesa 1", "kind": "mesa", "points": [[0.1, 0.1], [0.4, 0.1], [0.4, 0.5]]}])
+    panel.setFixedSize(760, 300)
+    panel.show()
+    sizes = set()
+    for n in (0, 1, 3, 12, 2, 0, 12, 1):                                        # objetos aparecem e somem
+        panel.set_state(_seed_state(n))
+        qapp.processEvents()
+        sizes.add((panel.width(), panel.height(), panel._objects_list.height(), panel._zones_list.height()))
+    assert len(sizes) == 1, f"o painel mudou de tamanho: {sizes}"              # estático: só o conteúdo da lista muda
+    panel.set_state(_seed_state(12))
+    qapp.processEvents()
+    assert panel._objects_list.verticalScrollBar().maximum() > 0               # muitos objetos: a lista ROLA, a caixa não cresce
+
+
+def test_hall_panel_objects_are_in_portuguese_sorted_and_stable(qapp):
+    from atendeio.app.labels import object_label, sorted_counts
+    from atendeio.app.ui.hall_panel import HallPanel
+
+    assert object_label("person") == "Pessoa" and object_label("wine glass") == "Taça" and object_label("xyz") == "xyz"
+    got = sorted_counts([{"name": "cup", "count": 1}, {"name": "person", "count": 3}, {"name": "chair", "count": 1}])
+    assert [c["name"] for c in got] == ["person", "chair", "cup"]               # mais frequente primeiro; empate em ordem alfabética
+    panel = HallPanel("X")
+    panel.set_state(_seed_state(3))
+    texts = [w.text() for w in panel._objects_list.widget().findChildren(type(panel._pill))]
+    assert "Pessoa" in texts and "person" not in texts
+
+
+def test_hall_panel_scroll_position_survives_updates(qapp):
+    from atendeio.app.ui.hall_panel import HallPanel
+
+    panel = HallPanel("X")
+    panel.setFixedSize(760, 260)
+    panel.show()
+    panel.set_state(_seed_state(12))
+    qapp.processEvents()
+    bar = panel._objects_list.verticalScrollBar()
+    bar.setValue(bar.maximum())
+    pos = bar.value()
+    st = _seed_state(12)
+    st["counts"][0]["count"] += 1
+    panel.set_state(st)                                                         # chegou dado novo
+    qapp.processEvents()
+    assert bar.value() == pos                                                   # a lista não volta ao topo
+
+
+def _settle(qapp, cycles: int = 12) -> None:
+    """O reflow do Qt leva alguns ciclos de eventos depois de um resize."""
+    for _ in range(cycles):
+        qapp.processEvents()
+        time.sleep(0.02)
+
+
+def test_camera_tile_is_responsive_and_its_size_never_depends_on_the_content(qapp, core, video_file):
+    cam = core.add_local(str(video_file), "Salão")["id"]
+    win = MainWindow(core, Bridge(), QIcon())
+    win.resize(1800, 1000)
+    win.show()
+    win._check(cam)
+    tile = win._tiles[cam]
+    _settle(qapp)
+
+    assert tile.side_by_side and tile.hall.x() > tile.video.x() + tile.video.width() - 5        # largo: informações AO LADO
+    assert abs(tile.hall.height() - tile.video.height()) <= 2                                   # mesma altura do vídeo
+    tile.hall.set_state(_seed_state(1))
+    _settle(qapp)
+    base = (tile.width(), tile.height(), tile.hall.width(), tile.hall.height())
+    for n in (12, 0, 5, 12):
+        tile.hall.set_state(_seed_state(n))
+        _settle(qapp)
+        assert (tile.width(), tile.height(), tile.hall.width(), tile.hall.height()) == base      # cartão estático
+
+    win.resize(900, 1000)                                                                       # estreito: informações EMBAIXO
+    _settle(qapp)
+    assert not tile.side_by_side and tile.hall.y() >= tile.video.y() + tile.video.height() - 5
+    narrow = (tile.hall.width(), tile.hall.height())
+    for n in (0, 12, 3):
+        tile.hall.set_state(_seed_state(n))
+        _settle(qapp)
+        assert (tile.hall.width(), tile.hall.height()) == narrow
+
+    win.resize(1800, 1000)                                                                      # voltou a ficar largo
+    _settle(qapp)
+    assert tile.side_by_side
+    win.quit_app()
+
+
+# ── Mapa do ambiente ─────────────────────────────────────────────────────────────────────────────────
+def _make_map_core(settings, tmp_path, n=2):
+    import cv2
+    import numpy as np
+    paths = []
+    for i in range(n):
+        p = tmp_path / f"map{i}.avi"
+        w = cv2.VideoWriter(str(p), cv2.VideoWriter_fourcc(*"MJPG"), 30, (320, 180))
+        for k in range(300):
+            w.write(np.full((180, 320, 3), k % 255, np.uint8))
+        w.release()
+        paths.append(str(p))
+    c = AppCore(replace(settings, mode="desktop", max_cameras=10, monitor_fps=15.0, idle_ttl_s=0.2), detector=FakeDetector(),
+                device_lister=lambda: [{"ref": p, "name": f"Câmera {i}"} for i, p in enumerate(paths)])
+    c.start()
+    c.paths = paths
+    return c
+
+
+MESA = {"name": "Mesa 1", "kind": "mesa", "shape": "rect", "angle": 0, "margin": 0.06,
+        "points": [[0.3, 0.2], [0.7, 0.2], [0.7, 0.8], [0.3, 0.8]]}
+
+
+def test_map_reads_only_the_selected_cameras_and_video_tiles_only_run_on_the_cameras_page(qapp, settings, tmp_path):
+    from atendeio.app.ui.map_page import MapPage
+
+    core = _make_map_core(settings, tmp_path, 3)
+    try:
+        a, b, c = [core.add_local(p, f"C{i}")["id"] for i, p in enumerate(core.paths)]
+        win = MainWindow(core, Bridge(), QIcon())
+        win.show()
+        assert isinstance(win.map, MapPage) and win.selected_camera_ids() == set()
+        win.nav_map.click()                                                           # nada selecionado: nada é lido nem desenhado
+        _settle(qapp)
+        assert win.map.scene.sections == [] and win.map.view.empty_text.startswith("Selecione")
+        assert all(core.c.registry.get(x) is None for x in (a, b, c))
+
+        win._check(a)                                                                 # marcou a câmera a COM o mapa aberto
+        assert win.selected_camera_ids() == {a}
+        assert pump(qapp, lambda: core.c.registry.get(a) is not None and core.c.registry.get(a).map_pin)
+        assert core.c.registry.get(a).viewers == 0                                    # lida sem contar como espectador
+        assert core.c.registry.get(b) is None and core.c.registry.get(c) is None      # as NÃO selecionadas nem abrem
+        assert [s.camera_id for s in win.map.scene.sections] == [a]
+        assert "tile" not in str(win._tiles[a].video.has_image()) and not win._tiles[a]._timer.isActive()   # vídeo parado: não está na página de câmeras
+
+        win._check(b)
+        assert pump(qapp, lambda: core.c.registry.get(b) is not None)
+        win._uncheck(a)                                                               # desmarcou a: some do mapa e é solta
+        assert pump(qapp, lambda: core.c.registry.get(a) is None, timeout=8)
+        assert [s.camera_id for s in win.map.scene.sections] == [b]
+
+        win.nav_cameras.click()                                                       # volta às câmeras: o vídeo da selecionada liga
+        assert pump(qapp, lambda: win._tiles[b].video.has_image())
+        assert core.c.registry.get(b).viewers == 1 and not core.c.registry.get(b).map_pin
+        win._go(1)                                                                    # Análise: o vídeo para e ninguém mais prende b
+        assert pump(qapp, lambda: core.c.registry.get(b) is None, timeout=8)
+        win.nav_map.click()
+        assert pump(qapp, lambda: core.c.registry.get(b) is not None)
+        win.hide()                                                                    # janela oculta: também solta
+        assert pump(qapp, lambda: core.c.registry.get(b) is None, timeout=8)
+        win.quit_app()
+    finally:
+        core.stop()
+
+def test_map_shows_live_state_selection_detail_history_and_open_camera(qapp, settings, tmp_path):
+    core = _make_map_core(settings, tmp_path, 1)
+    try:
+        cam = core.add_local(core.paths[0], "Salão")["id"]
+        core.set_recognition(cam, True, [0])
+        zid = core.replace_zones(cam, [MESA])[0]["id"]
+        _seed_flow_zone(core, cam, zid)
+        win = MainWindow(core, Bridge(), QIcon())
+        win.resize(1500, 850)
+        win.show()
+        win._check(cam)                                                               # só aparece no mapa se estiver selecionada
+        win.nav_map.click()
+        page = win.map
+        assert pump(qapp, lambda: page.scene and page.scene.section(cam) and page.scene.section(cam).status == "ok", timeout=10)
+        assert pump(qapp, lambda: (page.scene.block(cam, zid) or None) and page.scene.block(cam, zid).status == "ocupada")
+        assert page.scene.totals["people"] >= 1 and page.scene.totals["tables"]["ocupada"] == 1
+
+        got = []
+        page.open_camera.connect(got.append)
+        page.view.selected.emit(cam, zid)
+        _settle(qapp)
+        assert page.sel == (cam, zid) and "Mesa 1" in page.d_title.text()
+        assert page.d_chart.isVisible() and page.d_chart.model is not None
+        assert "Ocupada" in page.d_info.text()
+
+        page.b_open.click()
+        assert got == [cam]
+        win._show_camera(cam)
+        assert win.stack.currentIndex() == 0 and cam in win._tiles
+        win.quit_app()
+    finally:
+        core.stop()
+
+def _seed_flow_zone(core, cam, zid):
+    h = int(time.time()) // 3600
+    core.c.flow_writer.submit({"camera_id": cam, "minute": {}, "hour": {},
+                               "area": {(zid, h - i): (3600, 3600 * (1 + i % 3), 2 + i % 3, "Mesa 1", "mesa") for i in range(1, 6)}})
+    deadline = time.time() + 5
+    while time.time() < deadline and core.c.flow_writer.written < 1:
+        time.sleep(0.05)
+
+
+def test_dragging_a_camera_zone_with_the_real_mouse_persists_the_layout(qapp, settings, tmp_path):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtTest import QTest
+
+    core = _make_map_core(settings, tmp_path, 2)
+    try:
+        a, b = [core.add_local(p, f"C{i}")["id"] for i, p in enumerate(core.paths)]
+        win = MainWindow(core, Bridge(), QIcon())
+        win.resize(1500, 850)
+        win.show()
+        win._check(a)
+        win._check(b)
+        win.nav_map.click()
+        page, view = win.map, win.map.view
+        page.move_btn.click()                                                              # modo "Mover zonas" (senão arrastar desloca o mapa)
+        assert view.move_zones
+        assert pump(qapp, lambda: page.scene is not None and len(page.scene.sections) == 2)
+        before = page.scene.section(b).rect
+        pj = view.projector()
+        x0, y0, x1, y1 = before
+        start = pj.project(x0 + (x1 - x0) * 0.5, y0 + (y1 - y0) * 0.5, 0)               # meio do piso da câmera b (sem áreas)
+        end = (start[0] - 70, start[1] + 40)
+        QTest.mousePress(view, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(int(start[0]), int(start[1])))
+        QTest.mouseMove(view, QPoint(int((start[0] + end[0]) / 2), int((start[1] + end[1]) / 2)))
+        QTest.mouseMove(view, QPoint(int(end[0]), int(end[1])))
+        QTest.mouseRelease(view, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(int(end[0]), int(end[1])))
+        _settle(qapp)
+        after = page.scene.section(b).rect
+        assert (after[0], after[1]) != (before[0], before[1])                            # a zona andou
+        assert after[2] - after[0] == pytest.approx(before[2] - before[0])               # sem mudar de tamanho
+        saved = core.map_layouts()
+        assert b in saved and (saved[b][0], saved[b][1]) == pytest.approx((after[0], after[1]), abs=1e-6)   # e ficou salva
+        assert a not in saved                                                              # a outra segue no automático
+
+        win.quit_app()
+        again = MainWindow(core, Bridge(), QIcon())                                       # "reiniciou o app": layout mantido
+        again._check(a)
+        again._check(b)
+        again.nav_map.click()
+        assert pump(qapp, lambda: again.map.scene is not None and again.map.scene.section(b) is not None)
+        r = again.map.scene.section(b).rect
+        assert (r[0], r[1]) == pytest.approx((after[0], after[1]), abs=1e-6)
+        again.map.reset_layout()                                                          # "Reorganizar" volta ao automático
+        assert core.map_layouts() == {} and again.map.scene.section(b).rect[:2] == pytest.approx(before[:2], abs=1e-6)
+        again.quit_app()
+    finally:
+        core.stop()
+
+
+def test_map_mouse_only_pans_wheel_only_zooms_and_a_slider_sets_the_angle(qapp, settings, tmp_path):
+    import math
+
+    from PySide6.QtCore import QPoint, QPointF
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtTest import QTest
+
+    core = _make_map_core(settings, tmp_path, 1)
+    try:
+        cam = core.add_local(core.paths[0], "Salão")["id"]
+        core.replace_zones(cam, [MESA])
+        win = MainWindow(core, Bridge(), QIcon())
+        win.resize(1500, 850)
+        win.show()
+        win._check(cam)
+        win.nav_map.click()
+        page, view = win.map, win.map.view
+        assert pump(qapp, lambda: page.scene is not None and page.scene.section(cam) is not None)
+        _settle(qapp)
+
+        # ── arrastar com o mouse só DESLOCA: o ângulo e a rotação não mudam, a zona não anda ─────────────────
+        yaw0, pitch0, k0, o0 = view.yaw, view.pitch, view._k, view._o
+        rect0 = page.scene.section(cam).rect
+        a = QPoint(400, 300)
+        QTest.mousePress(view, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, a)
+        QTest.mouseMove(view, QPoint(460, 330))
+        QTest.mouseMove(view, QPoint(520, 380))
+        QTest.mouseRelease(view, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(520, 380))
+        _settle(qapp)
+        assert (view.yaw, view.pitch, view._k) == (yaw0, pitch0, k0)                      # nenhum movimento 3D, nenhum zoom
+        assert view._o == pytest.approx((o0[0] + 120, o0[1] + 80))                         # só translação (direita e para baixo)
+        assert page.scene.section(cam).rect == rect0 and core.map_layouts() == {}          # a zona NÃO foi movida nem salva
+
+        # ── a roda é SÓ zoom (Ctrl+roda não redimensiona mais a zona) ───────────────────────────────────────
+        for mods in (Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.ControlModifier):
+            before = view._k
+            ev = QWheelEvent(QPointF(700, 400), view.mapToGlobal(QPointF(700, 400)), QPoint(0, 0), QPoint(0, 120),
+                             Qt.MouseButton.NoButton, mods, Qt.ScrollPhase.NoScrollPhase, False)
+            QApplication.sendEvent(view, ev)
+            assert view._k > before
+        assert page.scene.section(cam).rect == rect0 and view.yaw == yaw0 and view.pitch == pitch0
+
+        # ── a angulação vem do slider; o ponto no centro da tela continua no centro ───────────────────────────
+        assert page.angle_slider.value() == 52 and "52" in page.angle_label.text()
+        center = QPointF(view.width() / 2, view.height() / 2)
+        anchor = view.projector().unproject_ground(center.x(), center.y())
+        page.angle_slider.setValue(80)
+        assert math.degrees(view.pitch) == pytest.approx(80) and page.angle_label.text() == "80°"
+        after = view.projector().project(anchor[0], anchor[1], 0)
+        assert after == pytest.approx((center.x(), center.y()), abs=1e-6)                  # o slider não faz o mapa "fugir"
+        page.angle_slider.setValue(5)                                                       # limite inferior do slider
+        assert math.degrees(view.pitch) >= 22 - 1e-9
+        page._iso_preset()
+        assert math.degrees(view.pitch) == pytest.approx(35.26, abs=0.1) and page.angle_slider.value() == 35   # preset move o slider
+        page._top_preset()
+        assert page.angle_slider.value() == 86
+        view.rotate_by(30)                                                                  # girar só por botão
+        assert view.yaw == pytest.approx(math.radians(30))
+
+        # ── tamanho da zona: botões (a roda não faz mais isso) e responsivo ───────────────────────────────────
+        size0 = page.scene.section(cam).rect
+        page.select(cam, 0)
+        page.b_bigger.click()
+        s1 = page.scene.section(cam).rect
+        assert (s1[3] - s1[1]) > (size0[3] - size0[1]) and core.map_layouts()[cam][2] > 1.0
+        for _ in range(30):
+            page.b_smaller.click()
+        assert core.map_layouts()[cam][2] == pytest.approx(0.4)
+        win.resize(1500, 850)
+        _settle(qapp)
+        assert page.side_by_side and page.side.x() > view.x() + view.width() - 5
+        win.resize(1150, 900)
+        _settle(qapp)
+        assert not page.side_by_side and page.side.y() >= view.y() + view.height() - 5
+        win.quit_app()
+    finally:
+        core.stop()
+
+def test_alert_rules_dialog_saves_and_changes_what_the_map_flags(qapp, core, video_file):
+    from atendeio.app import map_model as M
+    from atendeio.app.ui.map_page import AlertRulesDialog, MapPage, load_rules
+
+    cam = core.add_local(str(video_file), "Salão")["id"]
+    page = MapPage(core)
+    assert load_rules() == M.AlertRules()                                              # padrão (QSettings isolado)
+    zone = {"id": 1, "name": "Mesa 1", "kind": "mesa", "points": [[0.1, 0.1], [0.4, 0.1], [0.4, 0.5]]}
+    st = {"people": 0, "size": [640, 360], "online": True, "fps": 5, "recognition": {"enabled": True, "classes": 1, "person": True},
+          "areas": [{"id": 1, "name": "Mesa 1", "kind": "mesa", "status": "a_limpar", "people": 0, "seconds": 90}]}
+    page.snap = {"cameras": [{"id": cam, "name": "Salão", "kind": "local", "ref": "x"}], "zones": {cam: [zone]}, "states": {cam: st}, "limited": []}
+    page._rebuild()
+    assert page.scene.alerts == []                                                      # 90 s: ainda abaixo do aviso de 2 min
+
+    dlg = AlertRulesDialog(page.rules)
+    dlg.spins["clean_warn_s"].setValue(1)                                              # aviso após 1 min
+    dlg.accept()
+    from atendeio.app.ui.map_page import save_rules
+    page.rules = dlg.result_rules()
+    save_rules(page.rules)
+    page._rebuild()
+    assert [a.kind for a in page.scene.alerts] == ["clean"]
+    from PySide6.QtWidgets import QPushButton
+    assert any("Mesa 1 a limpar" in b.text() for b in page.alert_list.widget().findChildren(QPushButton))   # aparece na lista lateral
+    assert load_rules().clean_warn_s == 60                                              # persistiu
+    dlg._defaults()
+    assert dlg.result_rules() == M.AlertRules()                                         # "Restaurar padrão"
+
+
+def test_tests_never_touch_the_real_user_preferences(qapp, tmp_path):
+    """Regressão: `QSettings("org","app")` usa o formato NATIVO e escapava do isolamento (testes gravaram na configuração real)."""
+    from pathlib import Path
+
+    from atendeio.app import prefs
+
+    s = prefs.settings()
+    assert str(tmp_path) in s.fileName(), s.fileName()
+    assert Path(s.fileName()) != Path.home() / ".config" / "atendeIO" / "atendeIO.conf"
+    s.setValue("teste/marca", 1)
+    s.sync()
+    assert Path(s.fileName()).exists() and str(tmp_path) in str(Path(s.fileName()))
+
+
+def test_move_zones_mode_is_off_by_default_and_clicking_selects_without_dragging(qapp, settings, tmp_path):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtTest import QTest
+
+    core = _make_map_core(settings, tmp_path, 1)
+    try:
+        cam = core.add_local(core.paths[0], "Salão")["id"]
+        zid = core.replace_zones(cam, [MESA])[0]["id"]
+        win = MainWindow(core, Bridge(), QIcon())
+        win.resize(1500, 850)
+        win.show()
+        win._check(cam)
+        win.nav_map.click()
+        page, view = win.map, win.map.view
+        assert pump(qapp, lambda: page.scene is not None and page.scene.block(cam, zid) is not None)
+        _settle(qapp)
+        assert not view.move_zones and not page.move_btn.isChecked()
+
+        pj = view.projector()
+        sec = page.scene.section(cam)
+        top = pj.project((sec.rect[0] + sec.rect[2]) / 2, (sec.rect[1] + sec.rect[3]) / 2, page.scene.block(cam, zid).height)
+        QTest.mouseClick(view, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(int(top[0]), int(top[1])))
+        _settle(qapp)
+        assert page.sel == (cam, zid)                                                      # clique seleciona a área
+        QTest.mouseClick(view, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(5, 5))
+        _settle(qapp)
+        assert page.sel == (0, 0)                                                          # clique no vazio limpa a seleção
+        win.quit_app()
+    finally:
+        core.stop()

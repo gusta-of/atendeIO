@@ -72,3 +72,19 @@ def natural_key(name: str) -> list:
     """Ordem natural: "Mesa 2" antes de "Mesa 10"."""
     import re
     return [int(p) if p.isdigit() else p.lower() for p in re.split(r"(\d+)", name)]
+
+
+_OBJECT_LABELS: dict = {}
+
+
+def object_label(name: str) -> str:
+    """Rótulo em português de uma classe do YOLO ("person" -> "Pessoa"); o que não estiver no catálogo volta como veio."""
+    if not _OBJECT_LABELS:
+        from ..vision.classes import catalog
+        _OBJECT_LABELS.update({c["name"]: c["label"] for c in catalog()})
+    return _OBJECT_LABELS.get(name, name)
+
+
+def sorted_counts(counts: list) -> list:
+    """Objetos reconhecidos: mais frequentes primeiro; empate em ordem alfabética (a ordem não pula à toa)."""
+    return sorted(counts, key=lambda c: (-c["count"], object_label(c["name"]).lower()))

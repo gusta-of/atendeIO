@@ -16,7 +16,7 @@ se você ligar o monitoramento.
 > python scripts/recommend_fps.py # reconhece o hardware e recomenda o FPS das câmeras
 > ```
 >
-> Telas: câmeras ao vivo + Salão, **editar a configuração de cada câmera** (lápis), editor de áreas, logs, Análise de fluxo e
+> Telas: câmeras ao vivo + Salão, **Mapa do ambiente** (visão isométrica 2.5D em tempo real, com alertas), **editar a configuração de cada câmera** (lápis), editor de áreas, logs, Análise de fluxo e
 > **Configurações** (engrenagem: FPS por câmera e recomendação pelo seu hardware).
 > Documentação: [`docs/`](docs/README.md) — [guia do utilizador](docs/11-guia-do-usuario.md), [referência técnica](docs/10-app-nativo.md),
 > [desenvolvimento](docs/12-desenvolvimento.md). As seções abaixo descrevem a **versão web/servidor**, ainda no repositório.

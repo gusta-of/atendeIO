@@ -44,10 +44,12 @@ botão direito para **Editar câmera…** ou **Remover câmera**.
 Se o vídeo não aparece, o próprio cartão explica: *câmera pedindo usuário e senha*, *sem sinal* (confira endereço, porta, usuário e senha)
 ou *em uso por outro programa* (feche-o; uma webcam só abre em um programa por vez).
 
-### Salão (embaixo do vídeo)
+### Salão (ao lado ou embaixo do vídeo)
+O painel se adapta à tela: em **monitor grande** fica **ao lado** do vídeo, com a mesma altura; em tela menor, **embaixo**. O tamanho do cartão **não muda** quando
+objetos aparecem ou somem: as listas rolam dentro de uma área fixa.
 - Resumo: quantas mesas **livres**, **ocupadas** e **a limpar**.
 - Lista de mesas e áreas com estado e tempo. **Limpa** aparece nas mesas "a limpar": clique quando a equipe limpar.
-- Pessoas na área da câmera e objetos reconhecidos.
+- Pessoas na área da câmera e **objetos reconhecidos** (em português, do mais frequente ao menos, com o total; role a lista se houver muitos).
 - "Sem leitura" aparece quando o reconhecimento está desligado ou sem **Pessoa** marcada: nesse caso o estado das mesas não é confiável.
 
 **Estados da mesa:** `livre` → `ocupada` (pessoa por ≥ 3 s) → ao esvaziar por ≥ 15 s, vira `a limpar` se restaram copo, tigela, garrafa, taça
@@ -65,6 +67,39 @@ Clique no **lápis** do cartão (ou botão direito na lista → **Editar câmera
 
 Ao salvar, se você mudou o endereço ou as credenciais, o app **reinicia a conexão** com a câmera. Se algo estiver inválido (ex.: horário
 `25:00`, endereço repetido ou `127.0.0.1`), a janela mostra o motivo e continua aberta; o que veio antes **já foi salvo**.
+
+## 4.1 Mapa do ambiente (ver tudo sem ficar nas câmeras)
+
+Em **Mapa do ambiente** (barra lateral) você vê o salão **de uma vez**, numa **imagem em tempo real sem o vídeo**: cada área monitorada vira um **bloco em 3D leve**
+com a cor do estado e os dados dela; cada câmera é uma **zona** do mapa.
+
+| Cor | Significa |
+|---|---|
+| verde / vermelho / amarelo | mesa **livre** / **ocupada** / **a limpar** |
+| rosa · verde-água · lilás | **fila** · **entrada/saída** (transparente) · **balcão** |
+| cinza | **sem leitura** (reconhecimento desligado) ou câmera **fora do ar** (zona tracejada) |
+
+**O que cada bloco mostra:** nome, estado, pessoas e há quanto tempo (na fila, a espera). Passe o mouse para ver tudo; **clique** para o detalhe, com a **média e o pico por hora**
+dos últimos 7 dias (precisa do Monitorar ligado para ter histórico).
+
+**Alertas:** um selo **!** aparece em mesa **a limpar** há muito tempo, fila grande ou demorada, e câmera fora do ar / aguardando senha. A lista lateral leva ao item ao clicar.
+Os limites (padrão: 2 min a limpar, 3 min ou 5 pessoas na fila) mudam em **Alertas…**.
+
+**Resumo por câmera:** o painel lateral lista cada câmera com status, pessoas, mesas e FPS; **Ver câmera** abre o cartão dela.
+
+**O mapa só mostra as câmeras que você MARCA** na lista da barra lateral (as mesmas caixinhas que escolhem o vídeo). Câmera desmarcada **não aparece e não é lida**;
+marque ou desmarque com o mapa aberto e ele acompanha na hora. Sem nenhuma marcada, o mapa pede para você selecionar. (O vídeo dos cartões só roda na página **Câmeras**.)
+
+**Mexer na vista** (o mouse **nunca** gira a vista em 3D)
+- **Arrastar** (segurar e mover) **desloca** o mapa: esquerda/direita e cima/baixo. **Clicar** seleciona uma área ou câmera; clicar no vazio limpa a seleção.
+- **Roda do mouse = só zoom.**
+- **Slider "Ângulo"**: inclina a vista, de quase de lado (22°) até de cima (86°). O ponto que está no centro da tela fica no centro ao mover o slider.
+- Botões **⟲ ⟳** (giram 30° por clique), **Isométrico**, **De cima**, **− +** e **Ajustar** (reenquadra tudo).
+- **Montar o salão:** ligue **Mover zonas** e arraste uma zona de câmera; o app **lembra a posição**. Com o modo desligado, arrastar só desloca o mapa. **Zona +/−** (painel lateral) muda o tamanho
+  da zona. **Reorganizar** volta ao arranjo automático.
+
+> O mapa é uma **vista de cima aproximada**: as áreas foram desenhadas sobre a imagem da câmera (em perspectiva), não numa planta. Ajuste posição e tamanho das zonas para ficar parecido com o salão.
+> **Enquanto o mapa está aberto, todas as câmeras são lidas em ritmo baixo** (o de monitoramento, 1 FPS por padrão); ao sair, as que você não está monitorando são liberadas.
 
 ## 5. Editor de áreas
 
@@ -134,7 +169,7 @@ python scripts/recommend_fps.py --cameras 4     # com 4 câmeras analisando junt
 python scripts/recommend_fps.py --no-benchmark  # só estima pelos núcleos
 ```
 
-> A análise roda na **CPU**; a placa de vídeo não é usada nem necessária. Em computadores com pouca memória (< 6 GB) o app usa um perfil econômico
+> **Placa de vídeo não é necessária.** O app não escolhe nem configura GPU: o reconhecimento roda onde o PyTorch instalado mandar (no instalador previsto, só no processador). A medição de hardware mostra o desempenho real da sua máquina. Em computadores com pouca memória (< 6 GB) o app usa um perfil econômico
 > (sem a segmentação, até 3 câmeras).
 
 ## 9. Problemas comuns
@@ -153,4 +188,4 @@ python scripts/recommend_fps.py --no-benchmark  # só estima pelos núcleos
 ## 10. Onde ficam seus dados
 
 Linux: `~/.local/share/atendeIO/atendeIO/data/` (banco `atendeio.db` e chave `secret.key`: **faça backup dos dois juntos**) e
-`~/.config/atendeIO/atendeIO.conf` (preferências da tela). `ATENDEIO_DATA` troca a pasta de dados.
+`~/.config/atendeIO/atendeIO.ini` (preferências da tela). `ATENDEIO_DATA` troca a pasta de dados.

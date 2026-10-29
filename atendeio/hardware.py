@@ -101,7 +101,7 @@ def _ram_available_mb() -> Optional[int]:
 
 
 def _gpu() -> Optional[str]:
-    """Nome da placa de vídeo (só informativo: o atendeIO roda a detecção na CPU)."""
+    """Nome da placa de vídeo (só informativo: o app não exige placa de vídeo)."""
     if sys.platform == "win32":
         out = _run(["powershell", "-NoProfile", "-Command", "(Get-CimInstance Win32_VideoController).Name"], 6.0)
         names = [x.strip() for x in out.splitlines() if x.strip()]
@@ -186,7 +186,8 @@ def recommend(info: HardwareInfo, bench_ms: Optional[float] = None, cameras: int
     if sug_m < 1.0:
         notes.append("Esta máquina está no limite: o monitoramento foi reduzido abaixo de 1 FPS.")
     if info.gpu:
-        notes.append("O atendeIO analisa na CPU; a placa de vídeo não é usada (e não é necessária).")
+        notes.append("Placa de vídeo é opcional: o atendeIO funciona só com o processador, e a medição já reflete o que o seu "
+                     "computador realmente usa.")
     if hi_v >= VIEW_CAP:
         notes.append(f"Acima de {VIEW_CAP:.0f} FPS a contagem de pessoas não melhora, só gasta mais CPU.")
     return Recommendation(tier=tier, capacity_fps=round(capacity, 1), bench_ms=round(bench_ms, 1) if not estimated else None,

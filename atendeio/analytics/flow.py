@@ -177,6 +177,28 @@ def build_report(hour_rows: Iterable[tuple], area_rows: Iterable[tuple], tz: Zon
                       "timezone": str(tz)}}
 
 
+def area_profile(area_rows: Iterable[tuple], tz: ZoneInfo, zone_id: int, d_from: date, d_to: date,
+                 hour_from: int = 0, hour_to: int = 24) -> dict:
+    """Média e pico de pessoas por HORA DO DIA de UMA área (mini histórico do Mapa). `area_rows`: (zona, hora_utc, nome, tipo,
+    amostras, soma, max), como em `build_report`. Hora sem amostra vira `avg=None` (lacuna, nunca zero)."""
+    hourly = [[0, 0, 0] for _ in range(24)]
+    for zid, hour, _name, _kind, n, psum, pmax in area_rows:
+        if zid != zone_id:
+            continue
+        local = datetime.fromtimestamp(hour * 3600, tz)
+        if not (d_from <= local.date() <= d_to and hour_from <= local.hour < hour_to):
+            continue
+        cell = hourly[local.hour]
+        cell[0] += n
+        cell[1] += psum
+        cell[2] = max(cell[2], pmax)
+    out = [{"hour": h, "avg": _avg(c[1], c[0]), "max": c[2] if c[0] else None, "samples": c[0]} for h, c in enumerate(hourly)]
+    total_n = sum(c[0] for c in hourly)
+    peak = max((x for x in out if x["samples"]), key=lambda x: x["max"], default=None)
+    return {"hourly": out, "samples": total_n, "avg": _avg(sum(c[1] for c in hourly), total_n),
+            "peak": {"hour": peak["hour"], "value": peak["max"]} if peak else None}
+
+
 def insights(summary: dict, hourly: List[dict], hour_from: int = 0, hour_to: int = 24) -> List[str]:
     """Frases em português geradas por regras: o que o utilizador precisa saber sem olhar gráfico."""
     if not summary["samples"]:

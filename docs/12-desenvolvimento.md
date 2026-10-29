@@ -29,7 +29,7 @@ Para **ver** uma tela, salve uma captura: `widget.grab().save("/tmp/x.png")`.
 Convenções (aprendidas na prática):
 
 1. **Lógica fora do widget.** Regras do editor, logs, gráficos, FPS e hardware têm módulo puro com teste direto. O widget só desenha e traduz eventos.
-2. **Isole `QSettings`.** O app grava preferências reais; o autouse `isolated_settings` em `tests/test_app_ui.py` aponta para uma pasta temporária. Sem isso um teste contamina o seguinte (e a sua configuração).
+2. **Preferências só por `app/prefs.py`.** `QSettings("org","app")` usa o formato NATIVO e escapa do isolamento; `prefs.settings()` usa INI, e o autouse `isolated_settings` (`tests/test_app_ui.py`) o aponta para uma pasta temporária. Há um teste de regressão: sem isso, testes gravam na sua configuração real e se contaminam.
 3. **Nunca abra diálogo modal num teste.** `dlg.exec()` prende o teste. Troque a classe por um stub (`monkeypatch.setattr(mw, "EditCameraDialog", Stub)`) ou use os métodos (`dlg.save()`).
 4. **Teste não deixa nada ligado.** A fixture autouse `_no_leaked_pipelines` (`tests/conftest.py`) encerra hubs, escritor de histórico e monitor criados no teste; threads vazadas disputam CPU e derrubam testes de tempo só na rodada completa.
 5. **Janela encerrada não abre diálogo.** `QTimer.singleShot` pendente de uma janela já encerrada abre modal no teste seguinte; os handlers checam `_quitting`.
@@ -47,8 +47,16 @@ Convenções (aprendidas na prática):
 ### …uma tela
 Módulo em `app/ui/`, ligado em `main_window.py`. Se tem lógica, `app/<nome>_model.py` puro + teste. Cores e estilos no `theme.py`.
 
+### …algo no Mapa do ambiente
+Regra de negócio (cores, alturas, alertas, layout) em `app/map_model.py` e geometria em `app/iso.py`, **puros e com teste** (`test_map_model.py`, `test_iso.py`);
+o desenho em `ui/map_view.py` e a página em `ui/map_page.py`. Dados ao vivo vêm de `AppCore.map_snapshot()`; para ler câmeras use `map_enter()`/`map_leave()`
+(`HubRegistry.pin_for_map`), nunca `acquire` (ele conta como espectador e gasta o limite por utilizador).
+
 ### …um gráfico
 Geometria pura em `app/charts/models.py` (+ `tests/test_chart_models.py`); desenho `QPainter` em `app/ui/charts.py` (espaço lógico de 680 px, escalado); cartão com tabela alternativa em `analytics_page.py`.
+
+**Largura mínima da janela:** cada página soma ao mínimo da janela. Rótulos de uma linha só (legendas, dicas) e painéis de largura fixa fazem a janela exigir centenas de pixels
+(o Mapa chegou a pedir 1681 px). Use rótulos que quebram linha com `QSizePolicy.Ignored` e painéis com mínimo/máximo, não largura fixa.
 
 ## Armadilhas do ambiente
 

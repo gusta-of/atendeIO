@@ -11,6 +11,7 @@
 5. Desktop com Electron + motor HTTP local → **rejeitado** ("não é app web nem webview, nem serviço local").
 6. **App desktop nativo (Python + Qt)**: um processo, nenhuma porta aberta → **é o produto atual** ([10-app-nativo.md](10-app-nativo.md)).
 7. Paridade completa com a versão web + **Configurações (FPS por câmera + recomendação pelo hardware)** + **edição da configuração de cada câmera**.
+8. **Mapa do ambiente:** visão isométrica 2.5D em tempo real de todas as câmeras, com dados por área, alertas, resumo por câmera e mini histórico.
 
 ## Pronto e verificado (Linux)
 
@@ -18,12 +19,14 @@
 - Cadastro/edição/remoção de câmera RTSP e USB; **credenciais RTSP só em memória** (nada em disco, testado por varredura de bytes).
 - Editor de áreas, janela de logs, Análise de fluxo (com CSV), escolha de objetos.
 - Configurações: FPS por câmera (ao assistir / monitorando) aplicado ao vivo; reconhecimento do hardware e recomendação por medição real do YOLO; script `scripts/recommend_fps.py`.
+- **Mapa do ambiente** (isométrico 2.5D, `QPainter`): cor por estado, rótulos, alertas configuráveis, resumo por câmera, mini histórico, layout arrastável e salvo por câmera, responsivo.
 - Câmera ociosa é liberada (coletor); encerramento limpo por bandeja, `Ctrl+C` e `SIGTERM`; instância única; tela cheia (F11), abre maximizado.
 - Verificado: nenhuma porta de escuta nem conexão de rede do processo; webcam real + YOLO real; testes de interface com mouse real (offscreen).
-- Testes: **350 passando** (`python -m pytest -q`, ~2 min); detalhes em [12-desenvolvimento.md](12-desenvolvimento.md#testes).
+- Testes: **430 passando** (`python -m pytest -q`, ~2 min); detalhes em [12-desenvolvimento.md](12-desenvolvimento.md#testes).
 
 ## Não verificado
 
+- **Mapa:** testado com uma câmera real e várias câmeras de arquivo (simuladas); com várias câmeras físicas ao mesmo tempo, não. A vista de cima é **aproximada** (perspectiva da câmera ≠ planta).
 - **Windows e macOS** (câmera, instalador, assinatura, caminhos de dados, bandeja): só há Linux no ambiente de desenvolvimento.
 - **PC real de 4 GB**: a meta de memória (~1 GB hoje, com `torch`) ainda não cabe com folga.
 - Recomendação de FPS em máquina fraca (só medida num Ryzen 5 9600X).
@@ -55,6 +58,8 @@
 8. Se for vender para **vários restaurantes**: modelo de organização/loja e isolamento de rede por cliente.
 
 ## Ideias fora do escopo atual
+
+Mapa: exportar PNG, calibração por 4 pontos no chão (homografia), planta editável com paredes, pessoas como pontos em movimento, 3D real (Qt Quick 3D).
 
 Notificações push; GPU; i18n além do português; modelo treinado com fotos do salão para distinguir prato sujo de limpo; painel web para o dono ver pelo celular (leria da nuvem).
 

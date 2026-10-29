@@ -6,11 +6,12 @@ import time
 from datetime import datetime
 from typing import List
 
-from PySide6.QtCore import QAbstractListModel, QModelIndex, QSettings, Qt, QTimer
+from PySide6.QtCore import QAbstractListModel, QModelIndex, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QFontDatabase
 from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QListView,
                                QPlainTextEdit, QPushButton, QVBoxLayout)
 
+from .. import prefs
 from ..core import AppCore
 from ..log_events import MAX_CAPTURED, TYPES, LogBuffer, clock, to_ndjson
 
@@ -140,7 +141,7 @@ class LogsWindow(QDialog):
         self._timer = QTimer(self)
         self._timer.setInterval(POLL_MS)
         self._timer.timeout.connect(self._poll)
-        settings = QSettings("atendeIO", "atendeIO")
+        settings = prefs.settings()
         geo = settings.value(f"logwin/{cam['id']}")
         if geo:
             self.restoreGeometry(geo)
@@ -162,7 +163,7 @@ class LogsWindow(QDialog):
     def hideEvent(self, ev) -> None:                          # noqa: N802 (Qt)
         self._timer.stop()
         self._release_bus()
-        QSettings("atendeIO", "atendeIO").setValue(f"logwin/{self.cam['id']}", self.saveGeometry())
+        prefs.settings().setValue(f"logwin/{self.cam['id']}", self.saveGeometry())
         super().hideEvent(ev)
 
     def _release_bus(self) -> None:

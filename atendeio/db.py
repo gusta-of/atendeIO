@@ -45,6 +45,11 @@ CREATE TABLE IF NOT EXISTS zones (
     created REAL NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS zones_camera_name ON zones(camera_id, name);
+-- Mapa do ambiente: onde cada câmera fica no mapa (posição e escala da zona). Sem linha = layout automático.
+CREATE TABLE IF NOT EXISTS map_layout (
+    camera_id INTEGER PRIMARY KEY REFERENCES cameras(id) ON DELETE CASCADE,
+    x REAL NOT NULL, y REAL NOT NULL, scale REAL NOT NULL DEFAULT 1
+);
 -- Histórico de fluxo: SÓ números agregados (nunca imagens). Chaves em UTC; o fuso entra na consulta.
 CREATE TABLE IF NOT EXISTS flow_minute (
     camera_id INTEGER NOT NULL REFERENCES cameras(id) ON DELETE CASCADE,

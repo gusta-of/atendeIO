@@ -2,8 +2,8 @@
 
 import time
 
-from PySide6.QtCore import QSize, QTimer, Signal
-from PySide6.QtWidgets import (QCheckBox, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout)
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
+from PySide6.QtWidgets import (QBoxLayout, QCheckBox, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout)
 
 from ...errors import CredentialsRequired, DomainError
 from ..bridge import Bridge
@@ -11,6 +11,13 @@ from ..core import AppCore, Watch
 from .hall_panel import HallPanel
 from .icons import pencil_icon
 from .video_view import VideoView
+
+
+# Layout responsivo do cartão: com largura de sobra, vídeo à esquerda e informações à direita (mesma altura do vídeo);
+# estreito, informações embaixo do vídeo. Em qualquer modo o tamanho do cartão NÃO depende do conteúdo.
+SIDE_BY_SIDE_FROM = 1080     # largura útil do cartão (px)
+SIDE_MIN, SIDE_MAX = 380, 480  # largura do painel de informações ao lado
+STACKED_HALL_H = 300         # altura do painel de informações quando fica embaixo
 
 
 class CameraTile(QFrame):
@@ -77,21 +84,31 @@ class CameraTile(QFrame):
         root.addLayout(bar)
 
         self.video = VideoView()
-        root.addWidget(self.video)
         self._unlock = QPushButton("Informar usuário e senha da câmera")
         self._unlock.setProperty("primary", True)
         self._unlock.clicked.connect(lambda: self.unlock_requested.emit(self.cam_id))
         self._unlock.hide()
-        root.addWidget(self._unlock)
         self._caption = QPushButton("")
         self._caption.setProperty("ghost", True)
         self._caption.clicked.connect(lambda: self.objects_requested.emit(self.cam_id))
-        root.addWidget(self._caption)
+        media = QVBoxLayout()                    # coluna do vídeo
+        media.setContentsMargins(0, 0, 0, 0)
+        media.addWidget(self.video)
+        media.addWidget(self._unlock)
+        media.addWidget(self._caption)
+        media.addStretch(1)
 
         self.hall = HallPanel(cam["name"])
         self.hall.edit_zones.connect(lambda: self.edit_zones_requested.emit(self.cam_id))
         self.hall.clean.connect(self._on_clean)
-        root.addWidget(self.hall)
+
+        self.body = QBoxLayout(QBoxLayout.Direction.TopToBottom)         # vira LeftToRight quando há largura
+        self.body.setSpacing(14)
+        self.body.addLayout(media, 1)
+        self.body.addWidget(self.hall, 0, Qt.AlignmentFlag.AlignTop)
+        root.addLayout(self.body)
+        self._side_by_side = False
+        self._relayout()
 
         bridge.frame.connect(self._on_frame)
         bridge.state.connect(self._on_state)
@@ -99,6 +116,32 @@ class CameraTile(QFrame):
         self._timer.setInterval(1000)
         self._timer.timeout.connect(self._tick)
         self.refresh()
+
+    # -- layout responsivo ---------------------------------------------------------------------------------
+    @property
+    def side_by_side(self) -> bool:
+        return self._side_by_side
+
+    def resizeEvent(self, ev) -> None:                    # noqa: N802 (Qt)
+        super().resizeEvent(ev)
+        self._relayout()
+
+    def _relayout(self) -> None:
+        """Escolhe o arranjo pela largura do cartão e fixa o tamanho do painel de informações (nunca pelo conteúdo)."""
+        m = self.layout().contentsMargins()
+        avail = self.width() - m.left() - m.right()
+        side = avail >= SIDE_BY_SIDE_FROM
+        if side != self._side_by_side:
+            self._side_by_side = side
+            self.body.setDirection(QBoxLayout.Direction.LeftToRight if side else QBoxLayout.Direction.TopToBottom)
+        if side:
+            hall_w = int(min(SIDE_MAX, max(SIDE_MIN, avail * 0.30)))
+            self.hall.setFixedWidth(hall_w)
+            self.hall.setFixedHeight(self.video.heightForWidth(avail - hall_w - self.body.spacing()))   # igual ao do vídeo
+        else:
+            self.hall.setMinimumWidth(0)
+            self.hall.setMaximumWidth(16777215)
+            self.hall.setFixedHeight(STACKED_HALL_H)
 
     def _toggle(self, text: str) -> QPushButton:
         b = QPushButton(text)

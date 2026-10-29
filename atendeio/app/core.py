@@ -11,7 +11,8 @@ from typing import Callable, Optional
 from ..analytics.zones import KINDS
 from ..config import Settings
 from ..container import Container, build_container
-from ..errors import ValidationError
+from ..errors import DomainError, RateLimitError, ValidationError
+from ..repositories.map import MapRepository
 from ..services import rtsp
 from ..services.zones import to_zone
 
@@ -41,6 +42,11 @@ class AppCore:
         self.settings = settings
         self.c: Container = build_container(settings, device_lister=device_lister, detector=detector)
         self.user_id = self.c.auth.ensure_local_user()
+        self._map_repo = MapRepository(self.c.db)
+        self._map_pinned: set = set()
+        self._map_selected: Optional[set] = None
+        self._map_limited: set = set()
+        self._zone_cache: dict = {}
         self._started = False
         self._lock = threading.Lock()
         self._stop_evt = threading.Event()
@@ -106,6 +112,8 @@ class AppCore:
 
     def remove_camera(self, cam_id: int) -> None:
         self.c.cameras.delete(cam_id, self.user_id)
+        self._zone_cache.pop(cam_id, None)
+        self._map_pinned.discard(cam_id)
         self.c.registry.stop_camera(cam_id)
 
     def update_camera(self, cam_id: int, name: Optional[str] = None, host: Optional[str] = None, port=None,
@@ -165,6 +173,7 @@ class AppCore:
 
     def replace_zones(self, cam_id: int, zones: list) -> list:
         saved = self.c.zones.replace(cam_id, self.user_id, zones)
+        self._zone_cache.pop(cam_id, None)
         self.c.registry.set_zones(cam_id, [to_zone(r) for r in saved])
         return saved
 
@@ -205,6 +214,81 @@ class AppCore:
     def events_since(self, cam_id: int, seq: int, frames: bool = False) -> list:
         bus = self.event_bus(cam_id)
         return bus.recent_since(seq, frames) if bus else []
+
+    # -- Mapa do ambiente ---------------------------------------------------------------------------------------
+    def map_enter(self, camera_ids=None) -> None:
+        """O mapa abriu: lê as câmeras SELECIONADAS (`camera_ids`; None = todas) em FPS de monitoramento, sem gerar vídeo.
+        Câmera que pede senha fica de fora; se o teto de câmeras simultâneas for atingido, ela aparece como "limite"."""
+        self._map_limited.clear()
+        self.map_select(camera_ids)
+
+    def map_select(self, camera_ids=None) -> None:
+        """Sincroniza as câmeras lidas pelo mapa com a seleção: prende as recém-selecionadas e SOLTA as desmarcadas
+        (as monitoradas ou assistidas continuam; as outras são liberadas pelo coletor)."""
+        from ..services.recognition import parse as parse_recognition
+        self._map_selected = None if camera_ids is None else set(camera_ids)
+        for cid in list(self._map_pinned):
+            if self._map_selected is not None and cid not in self._map_selected:
+                self.c.registry.unpin_for_map(cid)
+                self._map_pinned.discard(cid)
+        self._map_limited &= (self._map_selected if self._map_selected is not None else self._map_limited)
+        for cam in self.c.cameras.list(self.user_id):
+            cid = cam["id"]
+            if self._map_selected is not None and cid not in self._map_selected:
+                continue
+            if cid in self._map_pinned or cam.get("needs_credentials"):
+                continue
+            row = self.c.cameras.get_owned(cid, self.user_id)
+            enabled, classes = parse_recognition(row)
+            try:
+                self.c.registry.pin_for_map(cid, self.user_id, lambda r=row: self.c.cameras.source_for(r),
+                                            self.c.zones.load(cid), enabled, classes)
+                self._map_pinned.add(cid)
+                self._map_limited.discard(cid)
+            except RateLimitError:
+                self._map_limited.add(cid)
+            except DomainError:
+                pass
+
+    def map_leave(self) -> None:
+        """O mapa fechou: solta as câmeras que ele prendeu (as monitoradas ou assistidas continuam)."""
+        for cid in list(self._map_pinned):
+            self.c.registry.unpin_for_map(cid)
+        self._map_pinned.clear()
+        self._map_limited.clear()
+        self._map_selected = None
+
+    def map_snapshot(self, camera_ids=None) -> dict:
+        """Tudo que o mapa precisa num instante, SÓ das câmeras pedidas (None = todas): câmeras, áreas (em cache), estados e
+        as que bateram no limite."""
+        wanted = None if camera_ids is None else set(camera_ids)
+        cams = [c for c in self.c.cameras.list(self.user_id) if wanted is None or c["id"] in wanted]
+        zones = {}
+        for cam in cams:
+            if cam["id"] not in self._zone_cache:
+                self._zone_cache[cam["id"]] = self.c.zones.list(cam["id"], self.user_id)
+            zones[cam["id"]] = self._zone_cache[cam["id"]]
+        live = self.c.registry.states_for(self.user_id)
+        return {"cameras": cams, "zones": zones, "states": {c["id"]: live.get(c["id"]) for c in cams},
+                "limited": sorted(c for c in self._map_limited if wanted is None or c in wanted)}
+
+    def map_layouts(self) -> dict:
+        """{camera_id: (x, y, scale)} salvos (o que faltar vem do layout automático)."""
+        return self._map_repo.all_for_user(self.user_id)
+
+    def set_map_layout(self, cam_id: int, x: float, y: float, scale: float) -> None:
+        self.c.cameras.get_owned(cam_id, self.user_id)
+        for v in (x, y, scale):
+            if not isinstance(v, (int, float)) or v != v or abs(v) > 1e6:
+                raise ValidationError("Posição inválida no mapa.")
+        self._map_repo.upsert(cam_id, float(x), float(y), max(0.4, min(3.0, float(scale))))
+
+    def reset_map_layout(self) -> None:
+        self._map_repo.clear_for_user(self.user_id)
+
+    def area_profile(self, cam_id: int, zone_id: int, days: int = 7) -> dict:
+        a, b = self._span(days, None, None)
+        return self.c.flow.area_profile(cam_id, self.user_id, zone_id, a, b)
 
     # -- análise de fluxo (dados locais) ---------------------------------------------------------------------
     def _span(self, days: Optional[int], d_from, d_to) -> tuple:

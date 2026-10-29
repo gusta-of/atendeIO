@@ -44,6 +44,7 @@ class CameraHub:
         self.cam_id, self.owner_id = cam_id, owner_id
         self.fps_view: Optional[float] = None      # FPS por câmera (None = padrão do sistema)
         self.fps_monitor: Optional[float] = None
+        self.map_pin = False          # preso pelo Mapa do ambiente (lido em FPS de monitoramento, sem contar como espectador)
         self.monitor = False          # monitoramento contínuo: o hub fica de pé mesmo sem ninguém assistindo
         self._wake = threading.Event()  # acorda a espera entre quadros (novo espectador, parada)
         self._flow = FlowAggregator(cam_id, settings.flow_flush_s)

@@ -5,13 +5,14 @@ com tabela alternativa e CSV."""
 from datetime import date, timedelta
 from typing import Optional
 
-from PySide6.QtCore import QDate, QSettings, Qt
+from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDateEdit, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel,
                                QLineEdit, QMessageBox, QProgressBar, QPushButton, QScrollArea, QTableWidget,
                                QTableWidgetItem, QVBoxLayout, QWidget)
 
 from ...errors import DomainError
 from ..charts import models as M
+from .. import prefs
 from ..core import AppCore
 from ..format import br_date, hh, num, pct
 from .charts import AreaBars, ColumnChart, DayChart, Heatmap
@@ -102,7 +103,7 @@ class AnalyticsPage(QWidget):
     def __init__(self, core: AppCore, parent=None):
         super().__init__(parent)
         self.core = core
-        self.settings = QSettings("atendeIO", "atendeIO")
+        self.settings = prefs.settings()
         self.report: Optional[dict] = None
         self._loading = False
         outer = QVBoxLayout(self)

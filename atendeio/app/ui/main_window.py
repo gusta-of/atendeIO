@@ -18,6 +18,7 @@ from .edit_camera_dialog import EditCameraDialog
 from .dialogs import AddLocalDialog, AddRtspDialog, ObjectsDialog, UnlockDialog
 from .icons import gear_icon
 from .logs_window import LogsWindow
+from .map_page import MapPage
 from .settings_dialog import SettingsDialog
 from .zone_editor import ZoneEditorDialog
 
@@ -78,10 +79,14 @@ class MainWindow(QMainWindow):
         self.nav_cameras.setCheckable(True)
         self.nav_cameras.setChecked(True)
         self.nav_cameras.clicked.connect(lambda: self._go(0))
+        self.nav_map = QPushButton("Mapa do ambiente")
+        self.nav_map.setCheckable(True)
+        self.nav_map.clicked.connect(lambda: self._go(2))
         self.nav_analysis = QPushButton("Análise de fluxo")
         self.nav_analysis.setCheckable(True)
         self.nav_analysis.clicked.connect(lambda: self._go(1))
         lay.addWidget(self.nav_cameras)
+        lay.addWidget(self.nav_map)
         lay.addWidget(self.nav_analysis)
         lay.addSpacing(10)
         head = QLabel("MINHAS CÂMERAS")
@@ -117,6 +122,9 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(scroll)
         self.analysis = AnalyticsPage(self.core)
         self.stack.addWidget(self.analysis)
+        self.map = MapPage(self.core)
+        self.map.open_camera.connect(self._show_camera)
+        self.stack.addWidget(self.map)
         return self.stack
 
     def _build_tray(self, icon: QIcon):
@@ -142,8 +150,16 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentIndex(page)
         self.nav_cameras.setChecked(page == 0)
         self.nav_analysis.setChecked(page == 1)
+        self.nav_map.setChecked(page == 2)
         if page == 1:
             self.analysis.open()
+        if page == 2:
+            self.map.open(self.selected_camera_ids())
+        else:
+            self.map.leave()                  # sai do mapa: solta as câmeras que ele prendeu
+        # o vídeo dos cartões só roda na página de Câmeras (nas outras ninguém o vê): economiza CPU e libera as câmeras
+        for tile in self._tiles.values():
+            tile.start() if page == 0 and self.isVisible() else tile.stop()
 
     def reload_cameras(self) -> None:
         checked = {cid for cid, t in self._tiles.items()}
@@ -156,6 +172,7 @@ class MainWindow(QMainWindow):
             item.setCheckState(Qt.CheckState.Checked if cam["id"] in checked else Qt.CheckState.Unchecked)
             self.list.addItem(item)
         self.list.blockSignals(False)
+        self.map.set_cameras(self.selected_camera_ids())      # câmera removida/editada: o mapa acompanha
 
     @staticmethod
     def _label(cam: dict) -> str:
@@ -166,12 +183,18 @@ class MainWindow(QMainWindow):
     def _on_item_clicked(self, item: QListWidgetItem) -> None:
         item.setCheckState(Qt.CheckState.Unchecked if item.checkState() == Qt.CheckState.Checked else Qt.CheckState.Checked)
 
+    def selected_camera_ids(self) -> set:
+        """Câmeras MARCADAS na lista: é a seleção que vale para o cartão de vídeo e para o Mapa do ambiente."""
+        return {self.list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.list.count())
+                if self.list.item(i).checkState() == Qt.CheckState.Checked}
+
     def _on_item_checked(self, item: QListWidgetItem) -> None:
         cam_id = item.data(Qt.ItemDataRole.UserRole)
         if item.checkState() == Qt.CheckState.Checked:
             self.open_tile(cam_id)
         else:
             self.close_tile(cam_id)
+        self.map.set_cameras(self.selected_camera_ids())       # o mapa acompanha a seleção (só se estiver aberto)
 
     def open_tile(self, cam_id: int) -> None:
         if cam_id in self._tiles:
@@ -191,7 +214,7 @@ class MainWindow(QMainWindow):
         self._tiles[cam_id] = tile
         self.empty.hide()
         self.tiles_lay.insertWidget(self.tiles_lay.count() - 1, tile)
-        if self.isVisible():
+        if self.isVisible() and self.stack.currentIndex() == 0:
             tile.start()
 
     def close_tile(self, cam_id: int) -> None:
@@ -220,6 +243,11 @@ class MainWindow(QMainWindow):
         menu.addAction("Editar câmera…", lambda: self.edit_camera(cam_id))
         menu.addAction("Remover câmera", lambda: self.remove_camera(cam_id))
         menu.exec(self.list.mapToGlobal(pos))
+
+    def _show_camera(self, cam_id: int) -> None:
+        """Do mapa para o cartão da câmera."""
+        self._go(0)
+        self._check(cam_id)
 
     def edit_camera(self, cam_id: int) -> None:
         """Abre a edição da câmera; ao fechar, recarrega a lista e reabre o cartão com a configuração nova."""
@@ -319,11 +347,15 @@ class MainWindow(QMainWindow):
     # -- visibilidade e ciclo de vida -------------------------------------------------------------------------
     def showEvent(self, event) -> None:                    # noqa: N802 (Qt)
         super().showEvent(event)
-        for tile in self._tiles.values():
-            tile.start()
+        if self.stack.currentIndex() == 2:
+            self.map.open(self.selected_camera_ids())
+        if self.stack.currentIndex() == 0:
+            for tile in self._tiles.values():
+                tile.start()
 
     def hideEvent(self, event) -> None:                    # noqa: N802 (Qt)
         # janela oculta/minimizada: ninguém vê o vídeo, então só o monitor (1 fps) segue trabalhando
+        self.map.leave()
         for tile in self._tiles.values():
             tile.stop()
         super().hideEvent(event)

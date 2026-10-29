@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-from ..analytics.flow import build_report, day_series, hourly_rows, local_day_bounds
+from ..analytics.flow import area_profile, build_report, day_series, hourly_rows, local_day_bounds
 from ..config import Settings
 from ..errors import ValidationError
 from ..repositories.flow import FlowRepository
@@ -47,6 +47,14 @@ class FlowService:
         lo, hi = self._hour_bounds(d_from, d_to)
         return build_report(self._repo.hours(cam_id, lo, hi), self._repo.areas(cam_id, lo, hi), self.tz,
                             d_from, d_to, hour_from, hour_to, now)
+
+    def area_profile(self, cam_id: int, user_id: int, zone_id: int, d_from: Optional[date] = None,
+                     d_to: Optional[date] = None, hour_from: int = 0, hour_to: int = 24) -> dict:
+        """Média/pico por hora do dia de uma área (padrão: últimos 7 dias). Câmera de outro dono é NotFound."""
+        self._cameras.get_owned(cam_id, user_id)
+        d_from, d_to = self._window(d_from, d_to, hour_from, hour_to)
+        lo, hi = self._hour_bounds(d_from, d_to)
+        return area_profile(self._repo.areas(cam_id, lo, hi), self.tz, zone_id, d_from, d_to, hour_from, hour_to)
 
     def day(self, cam_id: int, user_id: int, day: Optional[date] = None) -> dict:
         self._cameras.get_owned(cam_id, user_id)

@@ -45,7 +45,7 @@ máquina do cliente. O vídeo e as senhas das câmeras **não saem dela**. (A ve
 - **App:** `python -m atendeio.app` (precisa de `pip install -r requirements-app.txt`). Abre maximizado; F11 alterna tela cheia.
 - **Princípios:** um processo, nenhuma porta aberta; credenciais RTSP **só em memória** (pedidas a cada partida); nenhuma imagem gravada;
   cada câmera tem um único dono.
-- **Telas:** câmeras ao vivo + Salão, editor de áreas, logs, Análise de fluxo, **Configurações** (engrenagem: FPS por câmera e recomendação
+- **Telas:** câmeras ao vivo + Salão, **Mapa do ambiente** (visão isométrica 2.5D de tudo, com alertas), editor de áreas, logs, Análise de fluxo, **Configurações** (engrenagem: FPS por câmera e recomendação
   pelo hardware) e **edição da configuração de cada câmera** (lápis).
 - **Stack:** Python 3.14 · PySide6 (Qt) · OpenCV · Ultralytics YOLOv8n · SQLite. Motor reaproveitado, sem HTTP.
 - **Identificador do app:** `com.atendeio.app` (internacional).

@@ -88,6 +88,31 @@ class HubRegistry:
                 hub.monitor = False
                 hub.idle_since = time.monotonic()
 
+    # -- Mapa do ambiente: lê a câmera em FPS de monitoramento SEM contar como espectador ------------------------
+    def pin_for_map(self, cam_id: int, owner_id: int, get_source: Callable, zones: Iterable[Zone] = (),
+                    enabled: bool = True, classes: Optional[frozenset] = None) -> CameraHub:
+        """Garante o hub da câmera enquanto o mapa está aberto. Não aumenta `viewers` (não gasta o limite por utilizador),
+        mas respeita o teto global `max_cameras`. Sem espectador de vídeo, o hub roda no FPS de monitoramento."""
+        with self._lock:
+            hub = self._live(cam_id)
+            if hub is None:
+                if len(self._hubs) >= self._cfg.max_cameras:
+                    self._reap_zombies()
+                    raise RateLimitError("Limite de câmeras simultâneas atingido.")
+                hub = self._new_hub(cam_id, owner_id, get_source, zones, enabled, classes)
+                print(f"[*] câmera {cam_id} lida para o mapa")
+            hub.map_pin = True
+        self._reap_zombies()
+        return hub
+
+    def unpin_for_map(self, cam_id: int) -> None:
+        """O mapa fechou: a câmera segue o ciclo normal (some se ficar ociosa; fica se monitorada ou assistida)."""
+        with self._lock:
+            hub = self._hubs.get(cam_id)
+            if hub is not None and hub.map_pin:
+                hub.map_pin = False
+                hub.idle_since = time.monotonic()
+
     def release(self, hub: CameraHub) -> None:
         with self._lock:
             hub.viewers = max(0, hub.viewers - 1)
@@ -140,7 +165,7 @@ class HubRegistry:
         now = time.monotonic()
         with self._lock:
             dead = [k for k, h in self._hubs.items()
-                    if h.viewers == 0 and not h.monitor and now - h.idle_since > self._cfg.idle_ttl_s]
+                    if h.viewers == 0 and not h.monitor and not h.map_pin and now - h.idle_since > self._cfg.idle_ttl_s]
             hubs = [self._hubs.pop(k) for k in dead]
         for h in hubs:
             h.stop()
