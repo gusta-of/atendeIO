@@ -15,6 +15,7 @@ from ..errors import DomainError, RateLimitError, ValidationError
 from ..repositories.map import MapRepository
 from ..services import rtsp
 from ..services.zones import to_zone
+from .floor_calib import FloorCalib
 
 
 @dataclass
@@ -273,15 +274,37 @@ class AppCore:
                 "limited": sorted(c for c in self._map_limited if wanted is None or c in wanted)}
 
     def map_layouts(self) -> dict:
-        """{camera_id: (x, y, scale)} salvos (o que faltar vem do layout automático)."""
+        """{camera_id: (x, y, scale, rot°)} salvos (o que faltar vem do layout automático)."""
         return self._map_repo.all_for_user(self.user_id)
 
-    def set_map_layout(self, cam_id: int, x: float, y: float, scale: float) -> None:
+    def set_map_layout(self, cam_id: int, x: float, y: float, scale: float, rot: float = 0.0) -> None:
         self.c.cameras.get_owned(cam_id, self.user_id)
-        for v in (x, y, scale):
+        for v in (x, y, scale, rot):
             if not isinstance(v, (int, float)) or v != v or abs(v) > 1e6:
                 raise ValidationError("Posição inválida no mapa.")
-        self._map_repo.upsert(cam_id, float(x), float(y), max(0.4, min(3.0, float(scale))))
+        self._map_repo.upsert(cam_id, float(x), float(y), max(0.4, min(3.0, float(scale))), float(rot) % 360.0)
+
+    def map_calibrations(self) -> dict:
+        """{camera_id: FloorCalib} das câmeras que têm o chão calibrado."""
+        out = {}
+        for cid, d in self._map_repo.calibrations_for_user(self.user_id).items():
+            try:
+                out[cid] = FloorCalib.from_dict(d)
+            except (ValueError, KeyError, TypeError):
+                continue                                  # dado ilegível: volta ao mapeamento aproximado
+        return out
+
+    def set_map_calibration(self, cam_id: int, pts, width: float, depth: float) -> None:
+        self.c.cameras.get_owned(cam_id, self.user_id)
+        try:
+            calib = FloorCalib(tuple((float(x), float(y)) for x, y in pts), float(width), float(depth))
+        except (ValueError, TypeError) as e:
+            raise ValidationError(str(e) or "Calibração inválida.")
+        self._map_repo.set_calibration(cam_id, calib.to_dict())
+
+    def clear_map_calibration(self, cam_id: int) -> None:
+        self.c.cameras.get_owned(cam_id, self.user_id)
+        self._map_repo.clear_calibration(cam_id)
 
     def reset_map_layout(self) -> None:
         self._map_repo.clear_for_user(self.user_id)

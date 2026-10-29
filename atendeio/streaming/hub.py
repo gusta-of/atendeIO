@@ -181,6 +181,8 @@ class CameraHub:
             # ritmo: cheio com vídeo aberto; devagar (monitor_fps) quando só a análise está rodando
             has_video = self._has_video()
             target_fps = (self.fps_view or self._cfg.max_fps) if has_video else (self.fps_monitor or self._cfg.monitor_fps)
+            if self.map_pin and not has_video:
+                target_fps = max(target_fps, self._cfg.map_fps)   # o mapa precisa de ritmo para mostrar o movimento
             try:
                 enabled, classes = self._recognition
                 wants, nwants = self._wanted(), self._wanted_frames()
@@ -318,8 +320,11 @@ class CameraHub:
             return state
         persons = [d["box"] for d in dets if d["name"] == "person"]
         state["people"] = self._people_counter.update(len(persons), now)
+        tracked = self._tracker.update(persons, now) if (self._analyzer.has_zones or self.map_pin) else []
+        # pés (centro da base da caixa) com id anônimo: só para o Mapa; nada disso vai para o disco
+        state["tracks"] = [{"id": i, "x": round((b[0] + b[2]) / 2, 4), "y": round(b[3], 4)} for i, b in tracked]
         if self._analyzer.has_zones:
-            people = self._tracker.update(persons, now)
+            people = tracked
             items = [d["box"] for d in dets if d["name"] in self._items]
             state.update(self._analyzer.update(people, items, now, shape[1] / shape[0]))
         else:

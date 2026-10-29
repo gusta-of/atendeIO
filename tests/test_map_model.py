@@ -203,3 +203,33 @@ def test_labels_never_repeat_the_status_and_cover_every_kind():
     assert sc.block(1, 4).lines == ["Entrada", "Entrada · 1 pessoa"]
     for b in (sc.block(1, i) for i in (1, 2, 3, 4)):
         assert len(set(b.lines)) == len(b.lines) and len(b.lines) == 2
+
+
+def test_a_rotated_zone_turns_around_its_center_with_its_blocks_and_people():
+    import math
+    cam = {"id": 1, "name": "A"}
+    zone = {"id": 1, "name": "M", "kind": "mesa", "points": [(0.6, 0.4), (0.7, 0.4), (0.7, 0.6), (0.6, 0.6)]}
+    st = {"size": [200, 100], "online": True, "areas": [], "people": 1, "tracks": [{"id": 1, "x": 0.5, "y": 0.5}]}   # aspecto 2:1
+    flat = M.build_scene([cam], {1: [zone]}, {1: st}, {1: M.Layout(0, 0, 1.0, 0)}).sections[0]
+    turned = M.build_scene([cam], {1: [zone]}, {1: st}, {1: M.Layout(0, 0, 1.0, 90)}).sections[0]
+    assert turned.rot == 90 and len(turned.quad) == 4
+    # o centro da zona não sai do lugar e a pessoa que estava no centro continua no centro
+    cx = sum(q[0] for q in turned.quad) / 4, sum(q[1] for q in turned.quad) / 4
+    assert cx == pytest.approx((1.0, 0.5)) and turned.people[0][1:] == pytest.approx((1.0, 0.5))
+    # 90°: a zona 2x1 vira 1x2 (largura e altura trocam)
+    xs, ys = [q[0] for q in turned.quad], [q[1] for q in turned.quad]
+    assert max(xs) - min(xs) == pytest.approx(1.0) and max(ys) - min(ys) == pytest.approx(2.0)
+    # a mesa girou junto: a distância dela ao centro é a mesma
+    d = lambda sec: math.dist(sec.blocks[0].footprint[0], (1.0, 0.5))
+    assert d(flat) == pytest.approx(d(turned)) and flat.blocks[0].footprint != turned.blocks[0].footprint
+
+
+def test_clicking_a_rotated_zone_hits_the_turned_shape_not_the_old_rectangle():
+    cam = {"id": 1, "name": "A"}
+    st = {"size": [200, 100], "online": True, "areas": [], "people": 0}
+    sc = M.build_scene([cam], {1: []}, {1: st}, {1: M.Layout(0, 0, 1.0, 90)})
+    pj = iso.Projector(0.0, math.radians(86), 100.0, (300.0, 300.0))
+    inside_turned = pj.project(1.0, 1.3, 0.0)      # só existe depois de girar (a zona ficou alta)
+    outside_turned = pj.project(1.8, 0.5, 0.0)     # só existia antes de girar (a zona ficou estreita)
+    assert M.pick(sc, pj, *inside_turned) == ("section", 1)
+    assert M.pick(sc, pj, *outside_turned) is None

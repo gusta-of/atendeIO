@@ -191,3 +191,38 @@ def test_status_follows_the_smoothed_count_shown_on_screen():
     for t in range(6, 40):
         area = a.update([inside] if t % 4 == 0 else [], [], t)["areas"][0]
     assert area["people"] == 0 and area["status"] != "ocupada"    # número e status concordam
+
+
+def test_person_close_to_the_camera_covering_the_table_in_the_image_is_not_at_the_table():
+    """Passar na frente da câmera cobre a mesa na imagem, mas os pés estão bem abaixo da base dela: não é da mesa."""
+    a = ZoneAnalyzer(CFG, [Zone(1, "Mesa 1", "mesa", ((0.1, 0.1), (0.5, 0.1), (0.5, 0.3), (0.1, 0.3)))])   # mesa longe: y de 0,1 a 0,3
+    close = (1, (0.05, 0.0, 0.6, 0.97))                          # corpo cobre a mesa; pés em 0,97 (bem à frente dela)
+    cut = (1, (0.05, 0.0, 0.6, 1.0))                             # colada na borda de baixo: pés fora do quadro
+    for t in (0, 4, 8):
+        assert status(a, [close], [], t)["people"] == 0
+        assert status(a, [cut], [], t)["people"] == 0
+    assert status(a, [close], [], 8)["status"] == "livre"
+
+
+def test_person_really_at_the_table_still_counts_with_feet_a_bit_below_the_base():
+    a = mesa()
+    seated = (1, (0.15, 0.2, 0.45, 0.58))                        # sentada: pés pouco abaixo da base (0,5)
+    assert status(a, [seated], [], 0)["people"] == 1
+    assert status(a, [seated], [], 4)["status"] == "ocupada"
+
+
+def test_person_touching_a_small_table_drawn_high_in_the_image_still_counts():
+    """Caso real (Câmera IP): Mesa 2 é um polígono pequeno no alto da imagem; a pessoa encostada nela tem os pés bem abaixo do polígono
+    (o polígono é o tampo, o chão da mesa fica mais embaixo) e mesmo assim está NA mesa."""
+    pts = ((0.31949, 0.11926), (0.28482, 0.16787), (0.35237, 0.20211), (0.38418, 0.14283))
+    a = ZoneAnalyzer(CFG, [Zone(2, "Mesa 2", "mesa", pts)])
+    beside = (1, (0.28, 0.0, 0.46, 0.49))                        # de pé ao lado da mesa, pés em 0,49
+    assert a.update([beside], [], 0, 16 / 9)["areas"][0]["people"] == 1
+    assert a.update([beside], [], 4, 16 / 9)["areas"][0]["status"] == "ocupada"
+
+
+def test_person_walking_in_front_of_the_camera_still_does_not_take_that_small_table():
+    pts = ((0.31949, 0.11926), (0.28482, 0.16787), (0.35237, 0.20211), (0.38418, 0.14283))
+    a = ZoneAnalyzer(CFG, [Zone(2, "Mesa 2", "mesa", pts)])
+    near = (1, (0.15, 0.0, 0.55, 1.0))                           # enorme e colada embaixo: muito mais perto da câmera
+    assert a.update([near], [], 0, 16 / 9)["areas"][0]["people"] == 0

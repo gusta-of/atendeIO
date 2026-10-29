@@ -1,6 +1,7 @@
 """Mapa do ambiente: visão isométrica 2.5D em tempo real de TODAS as câmeras, com os dados de cada área e um resumo geral por
 câmera, para não precisar ficar nas telas das câmeras. Enquanto a página está aberta as câmeras são lidas em FPS baixo (sem vídeo)."""
 
+import json
 import math
 import time
 from typing import Dict, Optional
@@ -17,6 +18,7 @@ from .. import prefs
 from ..core import AppCore
 from ..format import hh
 from .charts import ColumnChart
+from .floor_calib_dialog import FloorCalibDialog
 from .hall_panel import ScrollList
 from .map_view import ALERT_COLOR, SECTION_STATUS_TEXT, IsoMapView
 
@@ -103,6 +105,7 @@ class MapPage(QWidget):
         self.core = core
         self.rules = load_rules()
         self.layouts: Dict[int, M.Layout] = {}
+        self.calibs: dict = {}
         self.aspects: Dict[int, float] = {}
         self.snap: Optional[dict] = None
         self.scene: Optional[M.Scene] = None
@@ -116,6 +119,15 @@ class MapPage(QWidget):
         root.setContentsMargins(12, 12, 12, 12)
         root.addLayout(self._build_toolbar())
         self.view = IsoMapView()
+        self.view.set_people_options(self.people_btn.isChecked(), self.trails_btn.isChecked())
+        self._view_save = QTimer(self)                      # a vista (ângulo, zoom, posição) fica guardada
+        self._view_save.setSingleShot(True)
+        self._view_save.setInterval(400)
+        self._view_save.timeout.connect(self._save_view)
+        saved = self._load_view()
+        if saved:
+            self.view.restore_view(saved)
+        self.view.view_changed.connect(self._view_save.start)
         self.view.selected.connect(self.select)
         self.view.section_moved.connect(self._section_moved)
         self.view.section_dropped.connect(self._section_dropped)
@@ -127,7 +139,7 @@ class MapPage(QWidget):
         root.addLayout(self.body, 1)
         root.addLayout(self._build_legend())
         self._timer = QTimer(self)
-        self._timer.setInterval(1000)
+        self._timer.setInterval(500)      # 2 leituras/s; o mapa suaviza o movimento entre elas
         self._timer.timeout.connect(self.tick)
         self._side_by_side = True
 
@@ -150,9 +162,15 @@ class MapPage(QWidget):
         top.addWidget(self.live_dot)
         top.addWidget(self._btn("Reorganizar", self.reset_layout, "Volta as zonas das câmeras ao arranjo automático"))
         self.move_btn = self._btn("Mover zonas", self._toggle_move_zones,
-                                  "Liga o modo de arrastar as zonas das câmeras para montar o salão (desligado: arrastar desloca o mapa)",
+                                  "Deixa o arrastar sempre mover as zonas das câmeras (sem isso, segure Ctrl e arraste a zona; arrastar sem Ctrl desloca o mapa)",
                                   checkable=True)
         top.addWidget(self.move_btn)
+        self.people_btn = self._btn("Pessoas", self._people_opts, "Mostra as pessoas se movendo no mapa", checkable=True)
+        self.trails_btn = self._btn("Rastros", self._people_opts, "Mostra o caminho dos últimos segundos", checkable=True)
+        self.people_btn.setChecked(prefs.settings().value("map/people", True, type=bool))
+        self.trails_btn.setChecked(prefs.settings().value("map/trails", True, type=bool))
+        top.addWidget(self.people_btn)
+        top.addWidget(self.trails_btn)
         top.addWidget(self._btn("Alertas…", self.edit_rules, "Define quando o mapa destaca um alerta"))
 
         view = QHBoxLayout()
@@ -177,7 +195,7 @@ class MapPage(QWidget):
         view.addWidget(self.angle_label)
         for text, slot, tip in (("−", lambda: self.view.zoom_by(1 / 1.2), "Afastar (ou role a roda do mouse)"),
                                 ("+", lambda: self.view.zoom_by(1.2), "Aproximar (ou role a roda do mouse)"),
-                                ("Ajustar", lambda: self.view.fit_to_screen(), "Ajusta o zoom para enquadrar tudo")):
+                                ("Ajustar", lambda: (self.view.fit_to_screen(force=True), self.view._user_changed()), "Ajusta o zoom para enquadrar tudo")):
             view.addWidget(self._btn(text, slot, tip))
         view.addStretch()
         box = QVBoxLayout()
@@ -218,12 +236,22 @@ class MapPage(QWidget):
         self.b_open = self._btn("Ver câmera", self._open_selected_camera, "Abre o cartão desta câmera")
         self.b_bigger = self._btn("Zona +", lambda: self._scale_selected(1.15), "Aumenta a zona desta câmera no mapa")
         self.b_smaller = self._btn("Zona −", lambda: self._scale_selected(1 / 1.15), "Diminui a zona desta câmera no mapa")
+        self.b_calib = self._btn("Calibrar chão", self._calibrate_selected,
+                                 "Corrige a perspectiva desta câmera: marque 4 cantos do chão e o tamanho real")
         for b in (self.b_open, self.b_bigger, self.b_smaller):
             btns.addWidget(b)
+        btns2 = QHBoxLayout()
+        self.b_rot_l = self._btn("⟲ 15°", lambda: self._rotate_selected(-15), "Gira esta zona 15° para a esquerda (para alinhar com o ambiente)")
+        self.b_rot_r = self._btn("⟳ 15°", lambda: self._rotate_selected(15), "Gira esta zona 15° para a direita")
+        btns2.addWidget(self.b_rot_l)
+        btns2.addWidget(self.b_rot_r)
+        btns2.addWidget(self.b_calib)
+        btns2.addStretch()
         for w in (self.d_title, self.d_info, self.d_chart_title, self.d_chart, self.d_empty):
             dl.addWidget(w)
         dl.addLayout(btns)
-        self.detail.setFixedHeight(250)
+        dl.addLayout(btns2)
+        self.detail.setFixedHeight(285)
         lay.addWidget(self.detail)
         self._set_detail_visibility(False)
         return side
@@ -235,7 +263,7 @@ class MapPage(QWidget):
                  ("Sem leitura / fora do ar", "#475569")]
         legend = QLabel(" &nbsp; ".join(f'<span style="color:{c}">■</span> {text}' for text, c in items))
         hint = _label("Arraste o mapa para deslocá-lo (esquerda/direita, cima/baixo) · a roda dá zoom · o slider muda o ângulo · "
-                      "ligue “Mover zonas” para reposicionar as câmeras", muted=True)
+                      "segure Ctrl e arraste uma zona para movê-la (ou ligue “Mover zonas”)", muted=True)
         for w in (legend, hint):
             w.setWordWrap(True)
             w.setProperty("muted", True)
@@ -278,8 +306,10 @@ class MapPage(QWidget):
         self._active = True
         self.core.map_enter(self.camera_ids)
         self.layouts = {cid: M.Layout(*v) for cid, v in self.core.map_layouts().items()}
+        self.calibs = self.core.map_calibrations()
         self.tick()
-        self.view.fit_to_screen()
+        self.view.fit_to_screen()          # só enquadra se o utilizador ainda não escolheu uma vista
+        self._sync_slider()
         self._timer.start()
 
     def set_cameras(self, camera_ids) -> None:
@@ -302,6 +332,25 @@ class MapPage(QWidget):
         self._timer.stop()
         self.core.map_leave()
 
+    @staticmethod
+    def _load_view() -> Optional[dict]:
+        try:
+            st = json.loads(prefs.settings().value("map/view", "") or "")
+            if all(isinstance(st.get(k), (int, float)) and st[k] == st[k] for k in ("yaw", "pitch", "k", "cx", "cy")) and st["k"] > 0:
+                return {k: float(st[k]) for k in ("yaw", "pitch", "k", "cx", "cy")}
+        except (ValueError, TypeError, AttributeError):
+            pass
+        return None
+
+    def _save_view(self) -> None:
+        prefs.settings().setValue("map/view", json.dumps(self.view.view_state()))
+
+    def _people_opts(self) -> None:
+        st = prefs.settings()
+        st.setValue("map/people", self.people_btn.isChecked())
+        st.setValue("map/trails", self.trails_btn.isChecked())
+        self.view.set_people_options(self.people_btn.isChecked(), self.trails_btn.isChecked())
+
     # -- dados ------------------------------------------------------------------------------------------------------------
     def tick(self) -> None:
         self.snap = self.core.map_snapshot(self.camera_ids)
@@ -312,7 +361,7 @@ class MapPage(QWidget):
         if not self.snap:
             return
         s = self.snap
-        self.scene = M.build_scene(s["cameras"], s["zones"], s["states"], self.layouts, self.aspects, self.rules, s["limited"])
+        self.scene = M.build_scene(s["cameras"], s["zones"], s["states"], self.layouts, self.aspects, self.rules, s["limited"], self.calibs)
         for sec in self.scene.sections:
             h = sec.rect[3] - sec.rect[1]
             if h:
@@ -385,7 +434,7 @@ class MapPage(QWidget):
         self._maybe_refresh_profile()
 
     def _set_detail_visibility(self, has: bool) -> None:
-        for w in (self.d_info, self.d_chart_title, self.d_chart, self.b_open, self.b_bigger, self.b_smaller):
+        for w in (self.d_info, self.d_chart_title, self.d_chart, self.b_open, self.b_bigger, self.b_smaller, self.b_calib, self.b_rot_l, self.b_rot_r):
             w.setVisible(has)
         self.d_empty.setVisible(False)
 
@@ -446,6 +495,15 @@ class MapPage(QWidget):
                  for h in hours[lo:hi + 1]]
         self.d_chart.set_model(CM.column_model(items, lambda d: d["label"], lambda d, i, n: d["x"], height=150))
 
+    def _calibrate_selected(self) -> None:
+        cid = self.sel[0]
+        cam = next((c for c in (self.snap or {}).get("cameras", []) if c["id"] == cid), None)
+        if cam is None:
+            return
+        if FloorCalibDialog(self.core, cam, self.calibs.get(cid), self).exec():
+            self.calibs = self.core.map_calibrations()
+            self._rebuild()
+
     def _open_selected_camera(self) -> None:
         if self.sel[0]:
             self.open_camera.emit(self.sel[0])
@@ -455,25 +513,35 @@ class MapPage(QWidget):
         if cam in self.layouts:
             return self.layouts[cam]
         s = self.scene.section(cam)
-        return M.Layout(s.rect[0], s.rect[1], max(M.MIN_SCALE, min(M.MAX_SCALE, s.rect[3] - s.rect[1])))
+        return M.Layout(s.rect[0], s.rect[1], max(M.MIN_SCALE, min(M.MAX_SCALE, s.rect[3] - s.rect[1])), s.rot)
 
     def _section_moved(self, cam: int, dx: float, dy: float) -> None:
         lay = self._layout_of(cam)
-        self.layouts[cam] = M.Layout(lay.x + dx, lay.y + dy, lay.scale)
+        self.layouts[cam] = M.Layout(lay.x + dx, lay.y + dy, lay.scale, lay.rot)
         self._rebuild()
 
     def _section_dropped(self, cam: int) -> None:
         lay = self._layout_of(cam)
         try:
-            self.core.set_map_layout(cam, lay.x, lay.y, lay.scale)
+            self.core.set_map_layout(cam, lay.x, lay.y, lay.scale, lay.rot)
         except DomainError:
             pass
 
     def _section_scaled(self, cam: int, factor: float) -> None:
         lay = self._layout_of(cam)
-        self.layouts[cam] = M.Layout(lay.x, lay.y, M.clamp_scale(lay.scale * factor))
+        self.layouts[cam] = M.Layout(lay.x, lay.y, M.clamp_scale(lay.scale * factor), lay.rot)
         self._rebuild()
         self._section_dropped(cam)
+
+    def _section_rotated(self, cam: int, degrees: float) -> None:
+        lay = self._layout_of(cam)
+        self.layouts[cam] = M.Layout(lay.x, lay.y, lay.scale, (lay.rot + degrees) % 360.0)
+        self._rebuild()
+        self._section_dropped(cam)
+
+    def _rotate_selected(self, degrees: float) -> None:
+        if self.sel[0]:
+            self._section_rotated(self.sel[0], degrees)
 
     def _scale_selected(self, factor: float) -> None:
         if self.sel[0]:

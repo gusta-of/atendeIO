@@ -1,4 +1,4 @@
-"""Diálogos: adicionar câmera (RTSP/local), desbloquear câmeras (usuário/senha) e escolher objetos."""
+"""Diálogos: adicionar câmera (RTSP/local) e escolher objetos. (Usuário e senha: na edição da câmera.)"""
 
 from typing import List, Optional
 
@@ -116,71 +116,6 @@ class AddLocalDialog(QDialog):
             self.error.setText(str(e))
             return
         super().accept()
-
-
-class UnlockDialog(QDialog):
-    """Pede usuário e senha das câmeras RTSP depois de ligar o computador (ficam só na memória)."""
-
-    def __init__(self, core: AppCore, pending: List[dict], parent=None):
-        super().__init__(parent)
-        self.core, self.pending = core, list(pending)
-        self.setWindowTitle("Desbloquear câmeras")
-        self.setMinimumWidth(460)
-        lay = QVBoxLayout(self)
-        intro = QLabel("Por segurança, o usuário e a senha das câmeras de rede <b>não ficam salvos</b>. "
-                       "Informe-os para ligar o reconhecimento.")
-        intro.setWordWrap(True)
-        lay.addWidget(intro)
-        self.title = QLabel("")
-        self.title.setProperty("title", True)
-        lay.addWidget(self.title)
-        form = QFormLayout()
-        self.user = QLineEdit()
-        self.password = QLineEdit()
-        self.password.setEchoMode(QLineEdit.EchoMode.Password)
-        form.addRow("Usuário", self.user)
-        form.addRow("Senha", self.password)
-        lay.addLayout(form)
-        self.same = QCheckBox("Usar o mesmo usuário e senha para as demais câmeras")
-        self.same.setProperty("plain", True)
-        lay.addWidget(self.same)
-        self.error = QLabel("")
-        self.error.setStyleSheet("color:#f87171;")
-        lay.addWidget(self.error)
-        row = QHBoxLayout()
-        skip = QPushButton("Agora não")
-        skip.clicked.connect(self.reject)
-        self.ok = QPushButton("Desbloquear")
-        self.ok.setProperty("primary", True)
-        self.ok.clicked.connect(self._submit)
-        row.addStretch()
-        row.addWidget(skip)
-        row.addWidget(self.ok)
-        lay.addLayout(row)
-        self._show_current()
-
-    def _show_current(self) -> None:
-        cam = self.pending[0]
-        self.title.setText(f"{cam['name']}  ·  {cam['ref'].replace('rtsp://', '').split('/')[0]}")
-        self.user.clear()
-        self.password.clear()
-        self.same.setVisible(len(self.pending) > 1)
-        self.user.setFocus()
-
-    def _submit(self) -> None:
-        targets = self.pending if self.same.isChecked() else self.pending[:1]
-        try:
-            for cam in targets:
-                self.core.set_credentials(cam["id"], self.user.text(), self.password.text())
-        except DomainError as e:
-            self.error.setText(str(e))
-            return
-        self.pending = self.pending[len(targets):]
-        self.password.clear()
-        if not self.pending:
-            self.accept()
-        else:
-            self._show_current()
 
 
 class ObjectsDialog(QDialog):

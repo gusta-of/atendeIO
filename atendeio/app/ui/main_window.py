@@ -1,10 +1,10 @@
 """Janela principal: barra lateral (câmeras) + área de vídeo; bandeja do sistema."""
 
 import sys
-from typing import Dict
+from typing import Dict, Optional
 
 from PySide6.QtCore import QSize, Qt, QTimer
-from PySide6.QtGui import QAction, QCloseEvent, QIcon, QKeySequence, QShortcut
+from PySide6.QtGui import QAction, QCloseEvent, QColor, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow,
                                QMenu, QMessageBox, QPushButton, QScrollArea, QStackedWidget, QSystemTrayIcon,
                                QVBoxLayout, QWidget)
@@ -15,7 +15,7 @@ from ..core import AppCore
 from .camera_tile import CameraTile
 from .analytics_page import AnalyticsPage
 from .edit_camera_dialog import EditCameraDialog
-from .dialogs import AddLocalDialog, AddRtspDialog, ObjectsDialog, UnlockDialog
+from .dialogs import AddLocalDialog, AddRtspDialog, ObjectsDialog
 from .icons import gear_icon
 from .logs_window import LogsWindow
 from .map_page import MapPage
@@ -47,7 +47,6 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence(Qt.Key.Key_F11), self, activated=self.toggle_fullscreen)   # tela cheia de verdade
         self._tray = self._build_tray(icon)
         self.reload_cameras()
-        QTimer.singleShot(400, self.ask_credentials)
 
     # -- construção -------------------------------------------------------------------------------------------
     def _build_sidebar(self) -> QFrame:
@@ -167,9 +166,17 @@ class MainWindow(QMainWindow):
         self.list.clear()
         for cam in self.core.cameras():
             item = QListWidgetItem(self._label(cam))
+            color = self._lock_color(cam)
+            if color:
+                item.setForeground(QColor(color))
             item.setData(Qt.ItemDataRole.UserRole, cam["id"])
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(Qt.CheckState.Checked if cam["id"] in checked else Qt.CheckState.Unchecked)
+            if self._locked(cam):                 # sem usuário e senha: não dá para selecionar (nem aparece no mapa)
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
+                item.setData(Qt.ItemDataRole.CheckStateRole, None)
+                item.setToolTip("Sem usuário e senha: clique para informá-los (editar a câmera).")
+            else:
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(Qt.CheckState.Checked if cam["id"] in checked else Qt.CheckState.Unchecked)
             self.list.addItem(item)
         self.list.blockSignals(False)
         self.map.set_cameras(self.selected_camera_ids())      # câmera removida/editada: o mapa acompanha
@@ -177,10 +184,25 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _label(cam: dict) -> str:
         kind = "LOCAL" if cam["kind"] == "local" else "IP"
-        extra = "  🔒 pede senha" if cam.get("needs_credentials") else ""
+        extra = ""
+        if cam["kind"] == "rtsp":                 # só câmera de rede tem usuário/senha: 🔒 falta informar, 🔓 já informado
+            extra = "  🔒 sem usuário e senha" if cam.get("needs_credentials") else "  🔓"
         return f"{cam['name']}   [{kind}]{extra}"
 
+    @staticmethod
+    def _locked(cam: dict) -> bool:
+        return cam["kind"] == "rtsp" and bool(cam.get("needs_credentials"))
+
+    @staticmethod
+    def _lock_color(cam: dict) -> Optional[str]:
+        if cam["kind"] != "rtsp":
+            return None
+        return "#f87171" if cam.get("needs_credentials") else "#34d399"
+
     def _on_item_clicked(self, item: QListWidgetItem) -> None:
+        if not (item.flags() & Qt.ItemFlag.ItemIsUserCheckable):      # câmera bloqueada: o clique leva à edição
+            self.edit_camera(item.data(Qt.ItemDataRole.UserRole))
+            return
         item.setCheckState(Qt.CheckState.Unchecked if item.checkState() == Qt.CheckState.Checked else Qt.CheckState.Checked)
 
     def selected_camera_ids(self) -> set:
@@ -206,7 +228,7 @@ class MainWindow(QMainWindow):
             return
         tile = CameraTile(self.core, self.bridge, cam)
         tile.closed.connect(self._uncheck)
-        tile.unlock_requested.connect(self.unlock_one)
+        tile.unlock_requested.connect(self.edit_camera)     # usuário e senha só se informam ao editar a câmera
         tile.objects_requested.connect(self.choose_objects)
         tile.edit_requested.connect(self.edit_camera)
         tile.edit_zones_requested.connect(self.edit_zones)
@@ -288,29 +310,8 @@ class MainWindow(QMainWindow):
     def _check(self, cam_id: int) -> None:
         for i in range(self.list.count()):
             it = self.list.item(i)
-            if it.data(Qt.ItemDataRole.UserRole) == cam_id:
+            if it.data(Qt.ItemDataRole.UserRole) == cam_id and it.flags() & Qt.ItemFlag.ItemIsUserCheckable:
                 it.setCheckState(Qt.CheckState.Checked)
-
-    def ask_credentials(self) -> None:
-        """Na partida: câmeras de rede sem usuário/senha (nada disso fica salvo) pedem as credenciais."""
-        if self._quitting:                    # encerrando: nada de abrir diálogos
-            return
-        pending = self.core.cameras_needing_credentials()
-        if pending:
-            UnlockDialog(self.core, pending, self).exec()
-            self.reload_cameras()
-            for tile in self._tiles.values():
-                tile.stop()
-                tile.start()
-
-    def unlock_one(self, cam_id: int) -> None:
-        pending = [c for c in self.core.cameras() if c["id"] == cam_id]
-        if pending and UnlockDialog(self.core, pending, self).exec():
-            self.reload_cameras()
-            tile = self._tiles.get(cam_id)
-            if tile:
-                tile.stop()
-                tile.start()
 
     def choose_objects(self, cam_id: int) -> None:
         if ObjectsDialog(self.core, cam_id, self).exec():

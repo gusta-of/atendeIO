@@ -18,7 +18,7 @@ from PySide6.QtWidgets import QApplication
 from atendeio.app.bridge import Bridge
 from atendeio.app.core import AppCore
 from atendeio.app.theme import QSS
-from atendeio.app.ui.dialogs import AddLocalDialog, AddRtspDialog, ObjectsDialog, UnlockDialog
+from atendeio.app.ui.dialogs import AddLocalDialog, AddRtspDialog, ObjectsDialog
 from atendeio.app.ui.main_window import MainWindow
 from tests.conftest import FakeDetector
 
@@ -90,29 +90,48 @@ def test_hidden_window_stops_watching_but_keeps_the_pipeline_for_monitoring(qapp
     win.quit_app()
 
 
-def test_rtsp_camera_without_credentials_asks_for_them_and_never_saves_the_password(qapp, core, settings):
-    win_core = core
-    cam = win_core.add_rtsp("Caixa", "192.168.1.88", 554, "op", "S3nh@-UI-5521", "stream1")
+def test_rtsp_camera_without_credentials_shows_a_red_lock_and_gets_them_only_by_editing(qapp, core, settings, monkeypatch):
+    from atendeio.app.ui import main_window as mw
+    from atendeio.app.ui.edit_camera_dialog import EditCameraDialog
+    cam = core.add_rtsp("Caixa", "192.168.1.88", 554, "op", "S3nh@-UI-5521", "stream1")
     again = AppCore(replace(settings, mode="desktop"), detector=FakeDetector(), device_lister=lambda: [])   # reiniciou
     again.start()
+    opened = []
+    monkeypatch.setattr(mw, "EditCameraDialog", lambda c, cid, parent=None: opened.append(cid) or type(
+        "D", (), {"exec": lambda self: 0, "changed": False, "removed": False})())
     try:
-        win = MainWindow(again, Bridge(), QIcon())
+        win = MainWindow(again, Bridge(), QIcon())                           # NENHUM popup de usuário/senha na partida
         win.show()
-        win._check(cam["id"])
-        tile = win._tiles[cam["id"]]
         qapp.processEvents()
-        assert tile._unlock.isHidden() is False                              # botão "Informar usuário e senha"
-        pending = again.cameras_needing_credentials()
-        dlg = UnlockDialog(again, pending)
+        item = win.list.item(0)
+        assert "🔒" in item.text() and item.foreground().color().name() == "#f87171"      # vermelho, cadeado fechado
+        assert not (item.flags() & Qt.ItemFlag.ItemIsUserCheckable) and win.selected_camera_ids() == set()   # não dá para selecionar
+        win._check(cam["id"])
+        assert cam["id"] not in win._tiles and win.selected_camera_ids() == set()                              # nem abrir o cartão
+        win._on_item_clicked(item)
+        assert opened == [cam["id"]]                                         # o clique leva à edição da câmera
+        dlg = EditCameraDialog(again, cam["id"])
+        assert "informe" in dlg.user.placeholderText()
         dlg.user.setText("op")
         dlg.password.setText("S3nh@-UI-5521")
-        dlg._submit()
-        assert again.cameras_needing_credentials() == []
+        dlg.save()
+        win.reload_cameras()
+        item = win.list.item(0)
+        assert "🔓" in item.text() and item.foreground().color().name() == "#34d399"      # verde, cadeado aberto
+        assert item.flags() & Qt.ItemFlag.ItemIsUserCheckable                              # agora pode ser selecionada
+        win._check(cam["id"])
+        assert win.selected_camera_ids() == {cam["id"]}
         blob = b"".join(p.read_bytes() for p in settings.data_dir.rglob("*") if p.is_file())
         assert b"S3nh@-UI-5521" not in blob                                  # nada em disco
         win.quit_app()
     finally:
         again.stop()
+
+
+def test_local_camera_has_no_lock(qapp, core, video_file):
+    from atendeio.app.ui.main_window import MainWindow as MW
+    cam = {"kind": "local", "name": "W", "needs_credentials": False}
+    assert "🔒" not in MW._label(cam) and "🔓" not in MW._label(cam) and MW._lock_color(cam) is None
 
 
 def test_add_dialogs_and_objects_dialog(qapp, core, video_file):
@@ -890,3 +909,180 @@ def test_move_zones_mode_is_off_by_default_and_clicking_selects_without_dragging
         win.quit_app()
     finally:
         core.stop()
+
+
+def test_map_view_draws_walking_people_and_respects_the_toggles(qapp):
+    from atendeio.app import map_model as M
+    from atendeio.app.ui.map_view import IsoMapView
+    v = IsoMapView()
+    v.resize(700, 500)
+    cam = {"id": 1, "name": "A"}
+
+    def scene(x):
+        st = {"size": [640, 480], "online": True, "areas": [], "people": 1, "tracks": [{"id": 5, "x": x, "y": 0.9}]}
+        return M.build_scene([cam], {1: []}, {1: st}, {})
+    v.set_scene(scene(0.2), refit=True)
+    v.set_scene(scene(0.8))
+    assert len(v._markers) == 1 and v._people_timer.isActive()                  # há o que animar
+    with_people = v.grab().toImage()
+    v.set_people_options(False, False)
+    assert not v._people_timer.isActive()
+    without = v.grab().toImage()
+    assert with_people != without                                               # o boneco foi desenhado
+    v.set_scene(M.build_scene([cam], {1: []}, {1: None}, {}))
+    v.set_people_options(True, True)
+    import time
+    time.sleep(1.7)
+    v._step_people()
+    assert v._markers == [] and not v._people_timer.isActive()                  # sem amostra: some e o timer para
+
+
+def test_floor_calibration_dialog_marks_four_points_and_saves(qapp, tmp_path, monkeypatch):
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtGui import QImage
+    from PySide6.QtTest import QTest
+    from atendeio.app.ui.floor_calib_dialog import FloorCalibDialog
+    from atendeio.errors import DomainError
+
+    saved = {}
+
+    class FakeCore:
+        def watch(self, *a, **k):
+            raise DomainError("sem câmera neste teste")
+
+        def set_map_calibration(self, cid, pts, w, d):
+            saved.update(cid=cid, pts=list(pts), w=w, d=d)
+
+        def clear_map_calibration(self, cid):
+            saved["cleared"] = cid
+    dlg = FloorCalibDialog(FakeCore(), {"id": 7, "name": "IP"})
+    dlg.show()
+    dlg.stage.set_image(QImage(640, 360, QImage.Format.Format_RGB32))
+    assert not dlg.b_save.isEnabled()
+    r = dlg.stage._rect()
+    for fx, fy in ((0.35, 0.4), (0.65, 0.4), (0.9, 0.9), (0.1, 0.9)):
+        QTest.mouseClick(dlg.stage, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+                         QPoint(int(r.x() + fx * r.width()), int(r.y() + fy * r.height())))
+    assert len(dlg.stage.pts) == 4 and dlg.b_save.isEnabled()
+    dlg.width_in.setValue(4.0)
+    dlg.depth_in.setValue(3.0)
+    assert dlg.save() and saved["cid"] == 7 and saved["w"] == 4.0 and len(saved["pts"]) == 4
+    assert abs(saved["pts"][0][0] - 0.35) < 0.01
+
+
+def test_floor_calibration_dialog_rejects_a_crossed_quad(qapp):
+    from PySide6.QtGui import QImage
+    from atendeio.app.ui.floor_calib_dialog import FloorCalibDialog
+    from atendeio.errors import DomainError
+
+    class FakeCore:
+        def watch(self, *a, **k):
+            raise DomainError("x")
+    dlg = FloorCalibDialog(FakeCore(), {"id": 1, "name": "A"})
+    dlg.stage.set_image(QImage(640, 360, QImage.Format.Format_RGB32))
+    dlg.stage.pts = [(0.1, 0.5), (0.4, 0.5), (0.6, 0.5), (0.9, 0.5)]        # quatro pontos em linha reta
+    dlg._changed()
+    assert not dlg.b_save.isEnabled() and "quadrilátero" in dlg.status.text()
+    dlg.stage.pts = [(0.1, 0.9), (0.9, 0.9), (0.7, 0.4), (0.3, 0.4)]        # ordem qualquer (fundo clicado embaixo) vale
+    dlg._changed()
+    assert dlg.b_save.isEnabled()
+    dlg.stage.pts = [(-0.2, 0.9), (1.2, 0.9), (0.7, 0.4), (0.3, 0.4)]       # e cantos fora da imagem também
+    dlg._changed()
+    assert dlg.b_save.isEnabled()
+
+
+def test_map_page_rotates_the_selected_zone_and_keeps_it_after_reopening(qapp, core, video_file):
+    from atendeio.app.ui.map_page import MapPage
+    cam = core.add_local(str(video_file), "A")["id"]
+    page = MapPage(core)
+    page.open({cam})
+    page.tick()
+    page.select(cam, 0)
+    page.b_rot_r.click()
+    page.b_rot_r.click()
+    assert core.map_layouts()[cam][3] == 30.0
+    assert page.scene.section(cam).rot == 30.0
+    page.b_rot_l.click()
+    assert core.map_layouts()[cam][3] == 15.0
+    page.leave()
+    again = MapPage(core)
+    again.open({cam})
+    again.tick()
+    assert again.scene.section(cam).rot == 15.0                              # lembrado
+    again.leave()
+
+
+def test_ctrl_drag_moves_a_zone_without_the_move_mode_and_plain_drag_still_pans(qapp, settings, tmp_path):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtTest import QTest
+
+    core = _make_map_core(settings, tmp_path, 2)
+    try:
+        a, b = [core.add_local(p, f"C{i}")["id"] for i, p in enumerate(core.paths)]
+        win = MainWindow(core, Bridge(), QIcon())
+        win.resize(1500, 850)
+        win.show()
+        win._check(a)
+        win._check(b)
+        win.nav_map.click()
+        page, view = win.map, win.map.view
+        assert not view.move_zones                                                         # modo desligado
+        assert pump(qapp, lambda: page.scene is not None and len(page.scene.sections) == 2)
+        x0, y0, x1, y1 = page.scene.section(b).rect
+        start = view.projector().project((x0 + x1) / 2, (y0 + y1) / 2, 0)
+        p0 = QPoint(int(start[0]), int(start[1]))
+
+        def drag(mod):
+            QTest.mousePress(view, Qt.MouseButton.LeftButton, mod, p0)
+            QTest.mouseMove(view, p0 + QPoint(-35, 20))
+            QTest.mouseMove(view, p0 + QPoint(-70, 40))
+            QTest.mouseRelease(view, Qt.MouseButton.LeftButton, mod, p0 + QPoint(-70, 40))
+            _settle(qapp)
+
+        before, offset = page.scene.section(b).rect, view._o
+        drag(Qt.KeyboardModifier.NoModifier)                                               # sem Ctrl: desloca o mapa
+        assert page.scene.section(b).rect == before and view._o != offset and core.map_layouts() == {}
+        before = page.scene.section(b).rect
+        x0, y0, x1, y1 = before
+        start = view.projector().project((x0 + x1) / 2, (y0 + y1) / 2, 0)
+        p0 = QPoint(int(start[0]), int(start[1]))
+        offset = view._o
+        drag(Qt.KeyboardModifier.ControlModifier)                                          # com Ctrl: move a zona
+        after = page.scene.section(b).rect
+        assert (after[0], after[1]) != (before[0], before[1]) and view._o == offset
+        assert b in core.map_layouts() and a not in core.map_layouts()                     # salvo só para a zona movida
+        win.quit_app()
+    finally:
+        core.stop()
+
+
+def test_map_view_angle_zoom_and_position_are_saved_and_restored_even_in_a_different_window_size(qapp, core, video_file):
+    from PySide6.QtCore import QPointF
+    from atendeio.app.ui.map_page import MapPage
+    cam = core.add_local(str(video_file), "A")["id"]
+    page = MapPage(core)
+    page.resize(1200, 700)
+    page.show()
+    page.open({cam})
+    page.tick()
+    assert not page.view.locked_view                                     # vista padrão: enquadra sozinha
+    page.angle_slider.setValue(70)
+    page.view.rotate_by(30)
+    page.view.zoom_by(1.5, QPointF(300, 300))
+    want = page.view.view_state()
+    assert pump(qapp, lambda: not page._view_save.isActive())            # o salvamento espera 400 ms parado
+    page.leave()
+    page.close()
+
+    again = MapPage(core)
+    again.resize(900, 600)                                               # janela de outro tamanho
+    again.show()
+    again.open({cam})
+    again.tick()
+    got = again.view.view_state()
+    assert again.view.locked_view and again.angle_slider.value() == 70   # o slider mostra o ângulo guardado
+    assert got["yaw"] == pytest.approx(want["yaw"]) and got["pitch"] == pytest.approx(want["pitch"])
+    assert got["k"] == pytest.approx(want["k"]) and (got["cx"], got["cy"]) == pytest.approx((want["cx"], want["cy"]), abs=1e-6)
+    again.view.fit_to_screen(force=True)                                 # "Ajustar" ainda reenquadra
+    assert again.view.view_state()["k"] != pytest.approx(want["k"])
+    again.leave()

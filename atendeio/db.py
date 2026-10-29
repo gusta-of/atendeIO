@@ -48,7 +48,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS zones_camera_name ON zones(camera_id, name);
 -- Mapa do ambiente: onde cada câmera fica no mapa (posição e escala da zona). Sem linha = layout automático.
 CREATE TABLE IF NOT EXISTS map_layout (
     camera_id INTEGER PRIMARY KEY REFERENCES cameras(id) ON DELETE CASCADE,
-    x REAL NOT NULL, y REAL NOT NULL, scale REAL NOT NULL DEFAULT 1
+    x REAL NOT NULL, y REAL NOT NULL, scale REAL NOT NULL DEFAULT 1, rot REAL NOT NULL DEFAULT 0
+);
+-- Calibração do chão por câmera (4 pontos da imagem + tamanho real): posição fiel das pessoas e áreas no mapa. Sem linha = aproximado.
+CREATE TABLE IF NOT EXISTS map_calibration (
+    camera_id INTEGER PRIMARY KEY REFERENCES cameras(id) ON DELETE CASCADE,
+    data TEXT NOT NULL
 );
 -- Histórico de fluxo: SÓ números agregados (nunca imagens). Chaves em UTC; o fuso entra na consulta.
 CREATE TABLE IF NOT EXISTS flow_minute (
@@ -105,6 +110,8 @@ class Database:
             conn.execute("ALTER TABLE cameras ADD COLUMN recognition INTEGER NOT NULL DEFAULT 1")
         if "classes" not in cam_cols:
             conn.execute("ALTER TABLE cameras ADD COLUMN classes TEXT NOT NULL DEFAULT '[]'")
+        if "rot" not in {r["name"] for r in conn.execute("PRAGMA table_info(map_layout)")}:
+            conn.execute("ALTER TABLE map_layout ADD COLUMN rot REAL NOT NULL DEFAULT 0")
         for col in ("fps_view", "fps_monitor"):
             if col not in cam_cols:
                 conn.execute(f"ALTER TABLE cameras ADD COLUMN {col} REAL")

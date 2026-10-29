@@ -84,7 +84,7 @@ class CameraTile(QFrame):
         root.addLayout(bar)
 
         self.video = VideoView()
-        self._unlock = QPushButton("Informar usuário e senha da câmera")
+        self._unlock = QPushButton("Editar a câmera para informar usuário e senha")
         self._unlock.setProperty("primary", True)
         self._unlock.clicked.connect(lambda: self.unlock_requested.emit(self.cam_id))
         self._unlock.hide()
@@ -174,8 +174,8 @@ class CameraTile(QFrame):
             self._watch = self.core.watch(self.cam_id, self.bridge.callback_for(self.cam_id),
                                           boxes=self._boxes.isChecked(), areas=self._areas.isChecked())
         except CredentialsRequired:
-            self.video.set_message("Esta câmera pede usuário e senha.\nEles ficam só na memória e são pedidos de novo "
-                                   "toda vez que o computador liga.")
+            self.video.set_message("Esta câmera está sem usuário e senha.\nInforme-os em Editar (lápis); ficam só na memória "
+                                   "e precisam ser informados de novo toda vez que o computador liga.")
             self._unlock.show()
             return
         except DomainError as e:

@@ -4,6 +4,7 @@ Cada câmera vira uma "zona" (retângulo no mundo, `aspect × 1` vezes a escala)
 (a vista de cima é APROXIMADA: a imagem é uma perspectiva, não uma planta; o utilizador compensa arrastando/escalando a zona).
 Tudo aqui é puro e testável sem tela; `ui/map_view.py` só desenha o que este módulo devolve."""
 
+import math
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -60,6 +61,16 @@ class Layout:
     x: float = 0.0
     y: float = 0.0
     scale: float = 1.0
+    rot: float = 0.0           # graus, em torno do centro da zona (horário visto de cima)
+
+    def world(self, lx: float, ly: float, aspect: float) -> Tuple[float, float]:
+        """Ponto local da zona (x em 0..aspect, y em 0..1) no mundo: gira em torno do centro, escala e desloca."""
+        if self.rot:
+            r = math.radians(self.rot)
+            c, sn = math.cos(r), math.sin(r)
+            dx, dy = lx - aspect / 2, ly - 0.5
+            lx, ly = aspect / 2 + dx * c - dy * sn, 0.5 + dx * sn + dy * c
+        return (self.x + lx * self.scale, self.y + ly * self.scale)
 
 
 @dataclass
@@ -95,10 +106,13 @@ class CameraSummary:
 class Section:
     camera_id: int
     name: str
-    rect: Tuple[float, float, float, float]   # x0, y0, x1, y1 no mundo
+    rect: Tuple[float, float, float, float]   # x0, y0, x1, y1 no mundo, SEM girar (referência do layout)
     status: str
     blocks: List[Block]
     summary: CameraSummary
+    people: List[Tuple[int, float, float]] = field(default_factory=list)   # (id, x, y) no mundo: os pés de cada pessoa
+    quad: List[Tuple[float, float]] = field(default_factory=list)          # os 4 cantos no mundo, já girados (é o que se desenha)
+    rot: float = 0.0
 
 
 @dataclass
@@ -165,10 +179,19 @@ def camera_status(camera: dict, state: Optional[dict], limit_reached: bool = Fal
     return "ok" if state.get("online", True) else "offline"
 
 
+def to_world(lay: "Layout", aspect: float, calib, x: float, y: float) -> Tuple[float, float]:
+    """Ponto da imagem (0..1) no mundo. Com calibração do chão a perspectiva é corrigida; sem ela, mapeamento linear aproximado."""
+    if calib is not None:
+        loc = calib.to_local(x, y, aspect)
+        if loc is not None:
+            return lay.world(loc[0], loc[1], aspect)
+    return lay.world(x * aspect, y, aspect)
+
+
 # -- cena -------------------------------------------------------------------------------------------------------------
 def _block(camera_id: int, zone: dict, area: Optional[dict], state: Optional[dict], lay: Layout, aspect: float,
-           status: str, blind: bool, rules: AlertRules) -> Block:
-    pts = [(lay.x + x * aspect * lay.scale, lay.y + y * lay.scale) for x, y in zone["points"]]
+           status: str, blind: bool, rules: AlertRules, calib=None) -> Block:
+    pts = [to_world(lay, aspect, calib, x, y) for x, y in zone["points"]]
     kind = zone["kind"]
     no_read = blind and kind == "mesa"
     stat = area.get("status") if (area and kind == "mesa" and not no_read) else None
@@ -200,7 +223,7 @@ def _block(camera_id: int, zone: dict, area: Optional[dict], state: Optional[dic
 
 def build_scene(cameras: Sequence[dict], zones: Dict[int, list], states: Dict[int, Optional[dict]],
                 layouts: Dict[int, Layout], aspects: Optional[Dict[int, float]] = None,
-                rules: Optional[AlertRules] = None, limited: Sequence[int] = ()) -> Scene:
+                rules: Optional[AlertRules] = None, limited: Sequence[int] = (), calibs: Optional[Dict[int, object]] = None) -> Scene:
     """Monta a cena inteira. `layouts` pode estar incompleto: o que faltar vem do `auto_layout`."""
     rules = rules or AlertRules()
     aspects = dict(aspects or {})
@@ -219,7 +242,8 @@ def build_scene(cameras: Sequence[dict], zones: Dict[int, list], states: Dict[in
         status = camera_status(cam, st, cid in limited)
         areas = {a["id"]: a for a in (st or {}).get("areas", [])}
         blind = labels.no_reading(st)
-        blocks = [_block(cid, z, areas.get(z["id"]), st, lay, aspect, status, blind, rules) for z in zones.get(cid, [])]
+        calib = (calibs or {}).get(cid)
+        blocks = [_block(cid, z, areas.get(z["id"]), st, lay, aspect, status, blind, rules, calib) for z in zones.get(cid, [])]
         summary = CameraSummary(cid, cam["name"], status, fps=float((st or {}).get("fps") or 0.0),
                                 people=(st or {}).get("people") if status == "ok" else None, reading=not blind)
         for b in blocks:
@@ -234,7 +258,10 @@ def build_scene(cameras: Sequence[dict], zones: Dict[int, list], states: Dict[in
             cam_alerts.append(Alert("warn", "limit", cid, None, f"{cam['name']}: limite de câmeras simultâneas"))
         summary.alerts = len(cam_alerts)
         alerts += cam_alerts
-        sections.append(Section(cid, cam["name"], (lay.x, lay.y, lay.x + aspect * lay.scale, lay.y + lay.scale), status, blocks, summary))
+        feet = [(t["id"], *to_world(lay, aspect, calib, t["x"], t["y"]))
+                for t in (st or {}).get("tracks", [])] if status == "ok" else []
+        sections.append(Section(cid, cam["name"], (lay.x, lay.y, lay.x + aspect * lay.scale, lay.y + lay.scale), status, blocks, summary, feet,
+                                [lay.world(a, b, aspect) for a, b in ((0, 0), (aspect, 0), (aspect, 1), (0, 1))], lay.rot))
     alerts.sort(key=lambda a: (0 if a.level == "crit" else 1, a.text))
     totals = {"people": sum(s.summary.people or 0 for s in sections),
               "tables": {k: sum(s.summary.tables[k] for s in sections) for k in ("livre", "ocupada", "a_limpar")},
@@ -248,8 +275,7 @@ def scene_points(scene: Scene, pj: "iso.Projector") -> List[Tuple[float, float]]
     """Todos os pontos da cena em tela (para ajustar o zoom): cantos das zonas e topos dos blocos."""
     pts = []
     for s in scene.sections:
-        x0, y0, x1, y1 = s.rect
-        pts += pj.polygon([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], 0)
+        pts += pj.polygon(s.quad, 0)
         for b in s.blocks:
             pts += pj.polygon(b.footprint, b.height)
     return pts
@@ -281,7 +307,6 @@ def pick(scene: Scene, pj: "iso.Projector", sx: float, sy: float) -> Optional[tu
     ground = pj.unproject_ground(sx, sy)
     if ground:
         for s in reversed(scene.sections):
-            x0, y0, x1, y1 = s.rect
-            if x0 <= ground[0] <= x1 and y0 <= ground[1] <= y1:
+            if point_in_polygon(ground[0], ground[1], s.quad):
                 return ("section", s.camera_id)
     return None

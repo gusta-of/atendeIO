@@ -35,6 +35,7 @@ class AnalyticsConfig:
     clean_after_s: float = 20.0   # sem objetos por isso, "a limpar" vira "livre"
     people_window: int = 9        # amostras na mediana de pessoas (estabiliza a contagem)
     overlap_min: float = 0.35     # pontuação mínima (ver geometry.membership_score) pra contar na área
+    table_feet_tol: float = 0.06  # mesa: folga (fração do quadro) além do chão estimado da mesa; passou disso = a pessoa está na frente dela
 
 
 def _center(box) -> Tuple[float, float]:
@@ -122,11 +123,21 @@ class ZoneAnalyzer:
                     del store[zid]
 
     @staticmethod
-    def _affinity(box, z: Zone, ar: float, min_score: float) -> float:
+    def _affinity(box, z: Zone, ar: float, min_score: float, feet_tol: float = 0.06) -> float:
         """0 = a pessoa não é desta mesa; >0 = é (quanto maior, mais ligada). Duas formas de ser da mesa:
         sobrepor/cobrir a mesa, ou estar SENTADA na sombra de assentos: o CORPO (a caixa da pessoa, da altura
         do peito pra baixo) a até `margin` da borda da mesa. Quem senta ao lado fica fora do polígono, mas
-        encostado na sombra, e é da mesa."""
+        encostado na sombra, e é da mesa.
+
+        Antes disso, a posição NO CHÃO: o polígono da mesa é desenhado no TAMPO, então o chão dela fica abaixo dele
+        (~0,5 da altura de uma pessoa naquela profundidade). Quem pisa além disso (mais `feet_tol`) está NA FRENTE da mesa,
+        mais perto da câmera: cobre a mesa na imagem mas não está nela. Caixa colada na borda de baixo = pés fora do quadro,
+        conta como bem abaixo. A folga cresce com o tamanho da pessoa, então quem está encostado na mesa (mesmo longe
+        da câmera, com a mesa alta na imagem) continua contando."""
+        feet = box[3] + (0.15 if box[3] >= 0.985 else 0.0)
+        floor = max(y for _, y in z.points) + 0.5 * max(feet - box[1], 0.0)      # onde a mesa pisa no chão, na imagem
+        if feet > floor + feet_tol:
+            return 0.0
         over = membership_score(box, z.points)
         best = over if over >= min_score else 0.0
         if z.margin > 0:
@@ -164,7 +175,8 @@ class ZoneAnalyzer:
             min_score = self._cfg.overlap_min
             tables = [z for z in self._zones if z.kind == "mesa"]
             # mesa: afinidade = maior entre (sobreposição) e (proximidade à borda, dentro da sombra de assentos)
-            score = {z.id: {tid: self._affinity(box, z, ar, min_score) for tid, box in people} for z in tables}
+            score = {z.id: {tid: self._affinity(box, z, ar, min_score, self._cfg.table_feet_tol) for tid, box in people}
+                     for z in tables}
             members = {}
             for z in self._zones:
                 if z.kind == "mesa":

@@ -47,6 +47,7 @@ class Settings:
     max_cameras_per_user: int = 4    # câmeras simultâneas por utilizador
     first_frame_timeout_s: float = 12.0
     # monitoramento contínuo + histórico de fluxo (só números agregados, nunca imagens)
+    map_fps: float = 4.0      # ritmo mínimo de leitura com o Mapa aberto (mostra o movimento das pessoas)
     monitor_fps: float = 1.0          # ritmo da inferência quando NINGUÉM assiste o vídeo
     monitor_tick_s: float = 30.0      # de quanto em quanto o monitor confere as câmeras monitoradas
     flow_flush_s: float = 15.0        # descarrega as amostras agregadas no banco a cada tanto
@@ -105,6 +106,7 @@ class Settings:
             max_fps=float(_env("MAX_FPS", str(cls.max_fps))),
             occlusion=_env("OCCLUSION", "0" if eco.get("occlusion") is False else "1") == "1",
             monitor_fps=float(_env("MONITOR_FPS", str(cls.monitor_fps))),
+            map_fps=float(_env("MAP_FPS", str(cls.map_fps))),
             timezone=_env("TIMEZONE", cls.timezone),
             flow_minute_days=int(_env("FLOW_MINUTE_DAYS", str(cls.flow_minute_days))),
             flow_hour_days=int(_env("FLOW_HOUR_DAYS", str(cls.flow_hour_days))),

@@ -102,7 +102,7 @@ def test_map_layout_persists_per_camera_with_validation_and_cascade(core):
     assert core.map_layouts() == {}
     core.set_map_layout(a, 2.5, -1.0, 1.4)
     core.set_map_layout(a, 3.0, 0.5, 9.0)                                          # sobrescreve; escala presa a 3
-    assert core.map_layouts() == {a: (3.0, 0.5, 3.0)}
+    assert core.map_layouts() == {a: (3.0, 0.5, 3.0, 0.0)}
     for bad in (float("nan"), "x", 1e9):
         with pytest.raises(ValidationError):
             core.set_map_layout(b, bad, 0, 1)
@@ -182,3 +182,88 @@ def test_a_deselected_monitored_camera_keeps_running_but_leaves_the_map(core):
     core.map_select([b])
     assert wait(lambda: core.c.registry.get(a) is not None and not core.c.registry.get(a).map_pin)   # a é monitorada: segue lendo
     assert [x["id"] for x in core.map_snapshot([b])["cameras"]] == [b]                               # mas some do mapa
+
+
+class WalkingDetector(FakeDetector):
+    """Uma pessoa que anda da esquerda para a direita a cada leitura."""
+    def detect(self, frame, classes=None, masks=False):
+        out = super().detect(frame, classes, masks)
+        if out:
+            x = min(0.1 + 0.02 * self.calls, 0.9)
+            out[0]["box"] = (x - 0.05, 0.3, x + 0.05, 0.8)
+        return out
+
+
+def test_map_reads_walking_people_with_a_stable_id_and_faster_than_monitoring(settings, tmp_path):
+    import cv2
+    import numpy as np
+    p = tmp_path / "walk.avi"
+    w = cv2.VideoWriter(str(p), cv2.VideoWriter_fourcc(*"MJPG"), 30, (320, 180))
+    for k in range(300):
+        w.write(np.full((180, 320, 3), k % 255, np.uint8))
+    w.release()
+    c = AppCore(replace(settings, mode="desktop", monitor_fps=1.0, map_fps=20.0),
+                detector=WalkingDetector(), device_lister=lambda: [{"ref": str(p), "name": "A"}])
+    c.start()
+    try:
+        cid = c.add_local(str(p), "A")["id"]
+        c.set_recognition(cid, True, [0])
+        c.map_enter()
+        assert wait(lambda: c.map_snapshot()["states"].get(cid) and len(c.map_snapshot()["states"][cid].get("tracks", [])) == 1)
+        first = c.map_snapshot()["states"][cid]["tracks"][0]
+        assert wait(lambda: c.map_snapshot()["states"][cid]["tracks"] and c.map_snapshot()["states"][cid]["tracks"][0]["x"] > first["x"] + 0.1)
+        later = c.map_snapshot()["states"][cid]["tracks"][0]
+        assert later["id"] == first["id"] and abs(later["y"] - 0.8) < 1e-6     # mesmo id; "y" = os pés (base da caixa)
+        assert c.c.registry.get(cid).fps > 3.0                                  # ritmo do mapa, não o 1 fps do monitor
+    finally:
+        c.stop()
+
+
+def test_without_the_map_or_areas_no_tracking_runs(core):
+    cid = core.add_local(core.paths[0], "A")["id"]
+    core.set_recognition(cid, True, [0])
+    core.set_monitor(cid, True)                       # a câmera fica lida pelo monitor, sem mapa e sem áreas
+    assert wait(lambda: core.c.registry.get(cid) is not None and core.c.registry.get(cid).snapshot_state()["online"])
+    assert wait(lambda: core.c.registry.get(cid).snapshot_state()["people"] is not None)
+    assert core.c.registry.get(cid).snapshot_state()["tracks"] == []
+
+
+def test_floor_calibration_persists_is_validated_and_follows_the_camera(core):
+    cid = core.add_local(core.paths[0], "A")["id"]
+    pts = [(0.35, 0.4), (0.65, 0.4), (0.9, 0.9), (0.1, 0.9)]
+    assert core.map_calibrations() == {}
+    core.set_map_calibration(cid, pts, 4.0, 3.0)
+    got = core.map_calibrations()[cid]
+    assert got.width == 4.0 and got.pts[0] == (0.35, 0.4)
+    with pytest.raises(ValidationError):
+        core.set_map_calibration(cid, pts[:3], 4.0, 3.0)
+    with pytest.raises(ValidationError):
+        core.set_map_calibration(cid, pts, 0, 3.0)
+    core.clear_map_calibration(cid)
+    assert core.map_calibrations() == {}
+    core.set_map_calibration(cid, pts, 4.0, 3.0)
+    core.remove_camera(cid)
+    assert core.map_calibrations() == {}                  # some junto com a câmera (cascade)
+
+
+def test_zone_rotation_is_saved_per_camera_and_old_layouts_default_to_zero(core):
+    a, b = [core.add_local(p, n)["id"] for p, n in zip(core.paths[:2], "AB")]
+    core.set_map_layout(a, 1.0, 2.0, 1.5)                                   # forma antiga (sem rotação)
+    core.set_map_layout(b, 3.0, 4.0, 1.0, 450.0)                            # 450° = 90°
+    got = core.map_layouts()
+    assert got[a] == (1.0, 2.0, 1.5, 0.0) and got[b] == (3.0, 4.0, 1.0, 90.0)
+    with pytest.raises(ValidationError):
+        core.set_map_layout(a, 1.0, 2.0, 1.0, float("nan"))
+
+
+def test_an_old_database_gets_the_rotation_column(tmp_path):
+    import sqlite3
+    from atendeio.db import Database
+    path = tmp_path / "old.db"
+    c = sqlite3.connect(path)
+    c.executescript("CREATE TABLE map_layout (camera_id INTEGER PRIMARY KEY, x REAL NOT NULL, y REAL NOT NULL, scale REAL NOT NULL DEFAULT 1);")
+    c.commit(); c.close()
+    db = Database(path)
+    db.init()
+    c = sqlite3.connect(path)
+    assert "rot" in {r[1] for r in c.execute("PRAGMA table_info(map_layout)")}

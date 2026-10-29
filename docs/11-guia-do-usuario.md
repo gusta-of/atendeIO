@@ -22,8 +22,9 @@ Na barra lateral, escolha:
 - **+ Câmera local** (webcam USB): selecione a câmera da lista e, se quiser, dê um nome.
 - **+ Câmera IP (RTSP)**: informe nome, **marca** (preenche o caminho do vídeo sozinho), **endereço (IP)**, porta (554 por padrão), **usuário e senha** da câmera e o caminho.
 
-> 🔒 **A senha da câmera não é salva.** Ela fica só na memória e o app **pede de novo toda vez que o computador liga** (janela
-> "Desbloquear câmeras"). O IP, a porta e o caminho ficam salvos.
+> 🔒 **A senha da câmera não é salva.** Ela fica só na memória e você precisa **informá-la de novo toda vez que o computador liga**, só
+> pela **edição da câmera** (não há janela na partida). Na lista, a câmera de rede aparece em **vermelho com 🔒** enquanto falta usuário e senha (e **não pode ser selecionada**, então não aparece no mapa);
+> clicar nela abre a edição. Depois de informar, fica **verde com 🔓** e pode ser selecionada. O IP, a porta e o caminho ficam salvos.
 
 Depois de cadastrar, **marque a câmera na lista** para ver o vídeo ao vivo. Clique no nome para marcar/desmarcar; clique com o
 botão direito para **Editar câmera…** ou **Remover câmera**.
@@ -85,10 +86,19 @@ dos últimos 7 dias (precisa do Monitorar ligado para ter histórico).
 **Alertas:** um selo **!** aparece em mesa **a limpar** há muito tempo, fila grande ou demorada, e câmera fora do ar / aguardando senha. A lista lateral leva ao item ao clicar.
 Os limites (padrão: 2 min a limpar, 3 min ou 5 pessoas na fila) mudam em **Alertas…**.
 
+**Pessoas em movimento:** cada pessoa que a câmera vê aparece como um **boneco** que se move no mapa (com **sombra** no chão e, se ligado, um **rastro** dos últimos 8 s).
+Os botões **Pessoas** e **Rastros** na barra ligam e desligam (a escolha é lembrada). Com o mapa aberto, as câmeras são lidas a **4 quadros/s** (`ATENDEIO_MAP_FPS`) para o movimento ficar fluido.
+Sem calibração a posição é **aproximada** (a imagem é uma perspectiva, não uma planta). Para ficar fiel, **calibre o chão** da câmera: selecione a câmera no mapa → **Calibrar chão** → clique no vídeo os **4 cantos do chão** que quer mapear, **em qualquer ordem** (o app descobre qual é o fundo).
+Pode clicar **na área escura, fora da imagem**, para incluir o chão que a câmera não mostra por inteiro. Arraste um ponto para ajustar. Depois informe o tamanho real desse chão em metros: **largura** (de um lado ao outro) e **profundidade** (do fundo até a frente) → **Salvar**.
+Pessoas e áreas daquela câmera passam a respeitar a perspectiva (útil em câmeras altas ou inclinadas). **Remover calibração** volta ao aproximado. A mesma pessoa vista por duas câmeras aparece **duas vezes**.
+Nada é gravado: o rastro existe só na memória e some ao fechar o mapa.
+
 **Resumo por câmera:** o painel lateral lista cada câmera com status, pessoas, mesas e FPS; **Ver câmera** abre o cartão dela.
 
 **O mapa só mostra as câmeras que você MARCA** na lista da barra lateral (as mesmas caixinhas que escolhem o vídeo). Câmera desmarcada **não aparece e não é lida**;
 marque ou desmarque com o mapa aberto e ele acompanha na hora. Sem nenhuma marcada, o mapa pede para você selecionar. (O vídeo dos cartões só roda na página **Câmeras**.)
+
+**Orientar cada câmera no ambiente:** selecione a zona da câmera e use **⟲ 15° / ⟳ 15°** para **girar** só ela (as mesas e as pessoas dela giram junto, em torno do centro da zona), **Zona +/−** para o tamanho e **segure Ctrl e arraste** a zona para posicioná-la (também vale agarrar uma mesa dentro dela). O botão **Mover zonas** deixa o arrastar sempre mover a zona, sem Ctrl. Posição, tamanho e giro ficam salvos por câmera; **Reorganizar** volta ao automático. A **vista** (ângulo do slider, giro ⟲⟳, zoom e posição) também fica guardada e volta igual quando você reabre o app, mesmo com a janela em outro tamanho; **Ajustar** reenquadra tudo.
 
 **Mexer na vista** (o mouse **nunca** gira a vista em 3D)
 - **Arrastar** (segurar e mover) **desloca** o mapa: esquerda/direita e cima/baixo. **Clicar** seleciona uma área ou câmera; clicar no vazio limpa a seleção.
@@ -177,7 +187,7 @@ python scripts/recommend_fps.py --no-benchmark  # só estima pelos núcleos
 | Sintoma | Causa provável e o que fazer |
 |---|---|
 | "Não consegui abrir a câmera… em uso por outro programa" | Outro programa (ou outra cópia do app/servidor) está usando a webcam. Feche-o. |
-| Câmera de rede "pede usuário e senha" | Normal depois de ligar o computador. Use **Informar usuário e senha** (ou **Desbloquear câmeras**). |
+| Câmera de rede "pede usuário e senha" | Normal depois de ligar o computador. Clique na câmera (vermelha, 🔒) ou use o lápis para abrir a edição e informar usuário e senha. |
 | "Sem sinal da câmera" (rede) | Confira IP, porta, usuário, senha e caminho; teste no VLC. Edite em **✎**. |
 | Mesas sempre "Sem leitura" | Reconhecimento desligado ou **Pessoa** não marcada em **Objetos**. |
 | Não consigo ligar o **Monitorar** | Marque **Pessoa** em **Objetos** e ligue **Reconhecer**. |

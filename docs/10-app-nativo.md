@@ -137,7 +137,7 @@ Código: `camera_tile.py` (`_relayout`), `hall_panel.py` (`HallPanel`, `ScrollLi
 | Monitoramento com horário de funcionamento | Análise e edição da câmera |
 | Configurações: FPS por câmera + hardware | engrenagem → `settings_dialog.py` |
 | **Mapa do ambiente** (visão isométrica 2.5D em tempo real, alertas, resumo por câmera) | `map_page.py`, `map_view.py`, `map_model.py`, `iso.py` |
-| Credenciais RTSP sob demanda | `UnlockDialog` |
+| Credenciais RTSP sob demanda | `EditCameraDialog` (campos usuário/senha); sem popup na partida; lista: 🔒 vermelho = bloqueada (não selecionável), 🔓 verde = informada |
 | Login/cadastro por senha | **n/a** (dono local único; a conta virá com a nuvem) |
 | PWA, instalar, offline, tela de servidor | **n/a** (é um app nativo) |
 
@@ -162,15 +162,23 @@ AppCore.map_snapshot() ──► map_model.build_scene() ──► Scene (zonas,
 - **Projeção** (`iso.py`): `x' = x·cos(yaw) − y·sin(yaw)`, `y' = x·sin(yaw) + y·cos(yaw)`, `sx = x'·s`, `sy = (y'·sin(pitch) − z·cos(pitch))·s`. Órbita livre
   (**sem movimento 3D pelo mouse**: o ângulo vem de um **slider** de pitch 22°–86° que preserva o ponto central da tela; botões ⟲ ⟳ giram 30°); presets **Isométrico** (yaw 45°, pitch 35,26°) e **De cima** (pitch 86°). Faces laterais só as voltadas
   para o observador, desenho de trás para frente (`map_model.ordered_blocks`: empate de profundidade → o menor por cima); **o clique usa a mesma ordem**.
+- **Pessoas em movimento:** com `map_pin` o hub roda o `PersonTracker` mesmo sem áreas e publica `state["tracks"] = [{id, x, y}]` (**pés** = centro da base da caixa, normalizado, id anônimo) e a leitura sobe para
+  `Settings.map_fps` (4; `ATENDEIO_MAP_FPS`). `build_scene` mapeia os pés para o mundo com a **mesma regra linear** das áreas (`Section.people`). `people_model.PeopleSmoother` (puro) desliza cada marcador até a posição nova,
+  guarda 8 s de rastro e expira quem some por 1,5 s; `IsoMapView._people_layer` desenha sombra + boneco + rastro (~20 quadros/s só enquanto há gente) por cima dos blocos; botões Pessoas/Rastros em `prefs` (`map/people`, `map/trails`).
+  **Calibração do chão** (opcional, por câmera): `floor_calib.FloorCalib` (puro, numpy) resolve a homografia dos 4 cantos clicados → retângulo `largura × profundidade` (metros), que ocupa 70% da zona da câmera no mapa; `map_model.to_world` é usado **igual** para áreas e pessoas (sem calibração: linear). Os 4 pontos vêm em qualquer ordem (`canonical`: os de cima na imagem são o fundo) e podem ficar até 0,6 FORA da imagem; valida convexidade; pontos perto do horizonte são recortados. Persistida em `map_calibration` (JSON, cascade; `AppCore.map_calibrations/set_/clear_map_calibration`), diálogo `ui/floor_calib_dialog.py`, botão **Calibrar chão** no detalhe da câmera.
+  Limites: sem calibração a posição é aproximada, a mesma pessoa em duas câmeras aparece duas vezes, o boneco fica sempre por cima dos blocos (não é ocluído por mesas).
 - **Alertas** (`AlertRules`, editáveis em "Alertas…", salvos em `prefs`): mesa **a limpar** há > 2 min (aviso) / > 5 min (crítico); **fila** com espera > 3 min ou ≥ 5 pessoas
   (aviso) / > 6 min ou ≥ 8 (crítico); **câmera fora do ar**, **aguardando senha** ou **limite de câmeras**. Selo "!" no bloco (o crítico pisca), lista lateral clicável, contagem no topo.
 - **Resumo geral por câmera:** status (ao vivo / conectando / fora do ar / aguardando senha / limite), pessoas, mesas livres/ocupadas/a limpar, FPS, alertas; e totais gerais.
 - **Detalhe ao clicar** numa área: estado, pessoas, tempo e **mini histórico** (média e pico por hora, 7 dias) de `FlowService.area_profile` sobre `flow_area_hour`.
   Clicar numa zona de câmera mostra o resumo dela; **Ver câmera** abre o cartão; **Zona +/−** (ou Ctrl+roda) muda o tamanho da zona.
-- **Interação:** **arrastar desloca** o mapa (só translação); **clicar** seleciona (clique no vazio limpa); **a roda é só zoom**; o modo **Mover zonas** (desligado por padrão) faz o arraste
-  sobre uma zona de câmera mover a zona. Tamanho da zona: botões **Zona +/−** do painel lateral.
+- **Interação:** **arrastar desloca** o mapa (só translação); **clicar** seleciona (clique no vazio limpa); **a roda é só zoom**; **Ctrl+arrastar** move a zona de câmera (mesmo agarrando uma mesa dentro dela) e o modo **Mover zonas** (desligado por padrão) faz o arraste
+  sempre mover a zona. Tamanho da zona: botões **Zona +/−** do painel lateral.
 - **Seleção:** o mapa mostra e lê **somente as câmeras marcadas na lista lateral** (`MainWindow.selected_camera_ids()` → `MapPage.set_cameras` → `AppCore.map_select`); desmarcar solta a câmera na hora
   (se não for monitorada). O vídeo dos cartões só roda na página Câmeras (`MainWindow._go`).
+- **Rotação por zona:** `Layout.rot` (graus, em torno do centro da zona; coluna `map_layout.rot`, migrada) → `Layout.world()` aplica giro+escala+deslocamento a áreas, pessoas e aos 4 cantos (`Section.quad`, o que se desenha e o que o clique testa). Botões ⟲/⟳ 15° no detalhe da câmera.
+- **Mesa × pessoa perto da câmera:** `ZoneAnalyzer._affinity` rejeita quem pisa além de `table_feet_tol` (0,12 do quadro) abaixo da base da mesa (caixa colada na borda de baixo = pés fora do quadro, conta como bem abaixo): cobrir a mesa na imagem não basta, a pessoa tem de estar NA mesa.
+- **Vista guardada:** `IsoMapView.view_state()` (yaw, pitch, zoom e o ponto do mapa no CENTRO da tela, independente do tamanho da janela) vai para `prefs` (`map/view`, JSON, com 400 ms de debounce) e `restore_view` a reaplica quando a janela já está visível; enquanto a vista é escolhida/restaurada (`locked_view`) o mapa não reenquadra sozinho (só **Ajustar**, presets e **Reorganizar**). Redimensionar a janela mantém o centro.
 - **Layout:** automático (2 zonas por linha, sem sobrepor) até o utilizador **arrastar** uma zona; aí posição e escala ficam salvas **por câmera** (`map_layout`, apagadas com a câmera). **Reorganizar** volta ao automático.
 - **Leitura enquanto o mapa está aberto:** `AppCore.map_enter(ids)` prende as câmeras **selecionadas** (`HubRegistry.pin_for_map`) no **FPS de monitoramento** (sem gerar vídeo); **não contam como
   espectador** (não gastam o limite por utilizador) mas respeitam o teto global `max_cameras` (a que não couber aparece como "limite de câmeras"); câmera RTSP sem senha é ignorada.
@@ -245,7 +253,7 @@ JPEG 65. Qualquer variável `ATENDEIO_*` explícita vence.
 
 - **Nenhuma porta aberta**; só conexões de saída (e hoje nenhuma: a nuvem ainda não existe).
 - **Credenciais RTSP**: `services/credentials.py` guarda usuário/senha **só em memória**; nunca em disco (testado varrendo todos os arquivos),
-  nem em logs, eventos ou nos dados que irão à nuvem. Reiniciar o computador = pedir de novo (`UnlockDialog`).
+  nem em logs, eventos ou nos dados que irão à nuvem. Reiniciar o computador = informar de novo (`EditCameraDialog`).
 - **Anti-SSRF** no cadastro e na edição: loopback e link-local são barrados; redes privadas (`192.168.x.x`) são permitidas porque é onde ficam as câmeras.
 - **Isolamento por dono**: todo acesso passa por `get_owned` (mesmo com dono único, o contrato de segurança do motor foi mantido).
 - **Higiene do ambiente**: terminais de apps em snap (ex.: VS Code) exportam variáveis GTK/GSettings que derrubam bibliotecas gráficas;
