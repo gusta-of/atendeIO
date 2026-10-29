@@ -44,6 +44,19 @@ def list_v4l2_devices() -> list:
     return out
 
 
+def _is_v4l2(source) -> bool:
+    return isinstance(source, int) or str(source).startswith("/dev/video")
+
+
+def _request_webcam_format(cap) -> None:
+    """Webcam USB sem pedido explícito cai em YUYV cru e entrega ~5 fps; MJPG 640x480 a 30 fps rende ~3x mais.
+    A ordem importa: trocar a resolução depois zera o FPS pedido. Se o driver recusar, fica o padrão dele."""
+    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    cap.set(cv2.CAP_PROP_FPS, 30)
+
+
 def open_source(source) -> "cv2.VideoCapture":
     """Abre índice int, caminho /dev/videoN ou URL de rede e valida o 1º frame."""
     if isinstance(source, str) and source.startswith(NETWORK_PREFIXES):
@@ -62,6 +75,8 @@ def open_source(source) -> "cv2.VideoCapture":
     if not cap.isOpened():
         cap.release()
         raise RuntimeError("Não consegui abrir a fonte de vídeo.")  # sem a fonte: pode ter credenciais
+    if _is_v4l2(source):
+        _request_webcam_format(cap)
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # sempre o frame mais novo, não uma fila atrasada
     ok, frame = cap.read()
     if not ok or frame is None:

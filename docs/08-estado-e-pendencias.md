@@ -22,7 +22,7 @@
 - **Mapa do ambiente** (isométrico 2.5D, `QPainter`): cor por estado, rótulos, alertas configuráveis, resumo por câmera, mini histórico, layout arrastável e salvo por câmera, responsivo.
 - Câmera ociosa é liberada (coletor); encerramento limpo por bandeja, `Ctrl+C` e `SIGTERM`; instância única; tela cheia (F11), abre maximizado.
 - Verificado: nenhuma porta de escuta nem conexão de rede do processo; webcam real + YOLO real; testes de interface com mouse real (offscreen).
-- Testes: **430 passando** (`python -m pytest -q`, ~2 min); detalhes em [12-desenvolvimento.md](12-desenvolvimento.md#testes).
+- Testes: **410 passando** (`python -m pytest -q`, ~2 min); detalhes em [12-desenvolvimento.md](12-desenvolvimento.md#testes).
 
 ## Não verificado
 
@@ -54,7 +54,7 @@
 4. **Iniciar com o computador** (Windows: chave `Run`; macOS: Login Item; Linux: `.desktop`) e item na bandeja.
 5. **Empacotar e assinar**: PyInstaller por sistema + instalador (Windows `.exe` com Inno Setup/`signtool`; macOS `.dmg` com notarização; Linux AppImage); CI em matriz. Certificados são compra sua.
 6. **SaaS:** `LicenseService` (token Ed25519, relógio atrasado, carência), `UploadWorker` (marca-d'água sobre `flow_*`, lotes idempotentes), `cloud/` (FastAPI + Postgres, RLS por organização), `BillingProvider` abstrato, tela de conta e de bloqueio nativas.
-7. **Limpeza (só com a sua confirmação):** apagar `web/`, `desktop/`, `static/`, `atendeio/api/`, o modo servidor e os testes dessa camada; o histórico fica no git.
+7. **Feito:** `web/`, `desktop/` e `static/` foram removidos (ficam no histórico do git). `atendeio/api` foi mantida a pedido.
 8. Se for vender para **vários restaurantes**: modelo de organização/loja e isolamento de rede por cliente.
 
 ## Ideias fora do escopo atual
@@ -70,5 +70,5 @@ Notificações push; GPU; i18n além do português; modelo treinado com fotos do
 3. Rode `python -m pytest -q` antes de entregar; para a interface, `tests/test_app_ui.py` (offscreen).
 4. Não grave imagens; não persista nem registre credenciais RTSP; não abra portas; não use `QtCharts`/`opencv-python`.
 5. Use `.venv/bin/python`. Cuidado com `pkill -f`/`pgrep -f` com padrão que casa a própria linha de comando.
-6. Não apague código web/Electron sem autorização explícita.
+6. Não apague `atendeio/api` sem autorização explícita.
 7. Atualize esta pasta quando mudar algo que ela descreve.

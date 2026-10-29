@@ -19,11 +19,11 @@ se você ligar o monitoramento.
 > Telas: câmeras ao vivo + Salão, **Mapa do ambiente** (visão isométrica 2.5D em tempo real, com alertas), **editar a configuração de cada câmera** (lápis), editor de áreas, logs, Análise de fluxo e
 > **Configurações** (engrenagem: FPS por câmera e recomendação pelo seu hardware).
 > Documentação: [`docs/`](docs/README.md) — [guia do utilizador](docs/11-guia-do-usuario.md), [referência técnica](docs/10-app-nativo.md),
-> [desenvolvimento](docs/12-desenvolvimento.md). As seções abaixo descrevem a **versão web/servidor**, ainda no repositório.
+> [desenvolvimento](docs/12-desenvolvimento.md). As seções abaixo descrevem o motor e a API (servidor), que continuam no repositório.
 
 **Regra central:** cada câmera tem um único dono. Nenhum utilizador vê, lista ou abre a câmera de outro.
 
-> Documentação de engenharia (visão geral, arquitetura, segurança, frontend, API, deploy, estado): veja [`docs/`](docs/README.md).
+> Documentação de engenharia (visão geral, arquitetura, segurança, API, deploy, estado): veja [`docs/`](docs/README.md).
 
 ## Rodar
 
@@ -33,70 +33,13 @@ python app.py                    # http://127.0.0.1:8000  (equivale a: python -m
 python scripts/add_user.py maria # cria utilizador (útil com ATENDEIO_ALLOW_SIGNUP=0)
 python -m atendeio.cli.live --list   # debug local em janela OpenCV
 pip install -r requirements-dev.txt && python -m pytest
-node --test tests/js/shapes.test.js   # matemática das formas (rotação, redimensionar) do painel antigo
 ```
 
 Variáveis (`ATENDEIO_*`): `HOST`, `PORT`, `ALLOW_SIGNUP`, `COOKIE_SECURE` (use `1` atrás de HTTPS),
 `DATA`, `SECRET_KEY`, `MAX_FPS`, `MONITOR_FPS`, `TIMEZONE`, `IDLE_TTL`, `MAX_CAMERAS`, `MAX_CAMERAS_PER_USER`, `JPEG_QUALITY`,
-`FLOW_MINUTE_DAYS`, `FLOW_HOUR_DAYS`, `LOG_EVENTS_PER_S`, `OCCLUSION`, `FRONTEND_DIR`, `CORS_ORIGINS`.
+`FLOW_MINUTE_DAYS`, `FLOW_HOUR_DAYS`, `LOG_EVENTS_PER_S`, `OCCLUSION`, `CORS_ORIGINS`.
 Rode **um processo só** (pipelines das câmeras vivem em memória). Para expor a mais de uma máquina,
 ponha um proxy HTTPS na frente e defina `ATENDEIO_COOKIE_SECURE=1`.
-
-## Novo app (Ionic + Angular) — PWA e apps nativos
-
-O frontend novo mora em `frontend/` (Ionic 9 + Angular, componentes standalone + signals) e é servido **pelo próprio
-servidor, em `/app/`**, ao lado do painel antigo (que continua em `/`). Tem a mesma funcionalidade: login, câmeras ao vivo
-(áreas e caixas), Salão (mesas, "Limpa"), objetos, editor de áreas (formas, girar, redimensionar, sombra de assentos),
-janela de logs (virtualizada) e Análise de fluxo — agora com **menu lateral no tablet/desktop e abas inferiores no celular**.
-
-```bash
-cd frontend && pnpm install
-pnpm run build:web      # gera frontend/www, que o servidor entrega em http://HOST:8000/app/
-pnpm run start         # modo desenvolvimento (ng serve com proxy para :8000, sem service worker)
-pnpm test              # Vitest: formas, gráficos, URLs/tíquetes, login offline/nativo...
-pnpm run lint
-```
-
-Se `frontend/www` não existir, `/app/` responde com a instrução de compilar. Outro local: `ATENDEIO_FRONTEND_DIR`.
-Para ver tudo **sem webcam nem YOLO**: `python scripts/dev_demo.py` (porta 8001, usuário `demo` / `demo-senha-123`,
-vídeo sintético e detector falso; dados descartáveis em `/tmp/atendeio-demo`).
-
-### PWA (instalar e abrir sem rede)
-
-- **Instalar** no celular/tablet/PC: botão "Instalar app" no menu (Chrome/Edge/Android); no iPhone/iPad, Compartilhar →
-  *Adicionar à Tela de Início*. Ícones e `manifest.webmanifest` já inclusos (`start_url` `/app/cameras`).
-- **Offline = a casca do app.** O service worker (`ngsw-config.json`) guarda **só** HTML/JS/CSS/ícones. **Nunca** guarda
-  `/api`, `/stream` nem os eventos: nenhum dado autenticado fica em cache de service worker. Sem rede o app abre, mostra a
-  faixa "Sem conexão" e a última lista de câmeras; vídeo e números voltam com a rede. Sair apaga o que ficou no aparelho.
-- **Versão nova:** o app avisa ("Atualizar agora"); nunca recarrega sozinho no meio do uso.
-- **HTTPS é obrigatório para instalar.** Em `http://IP-da-rede` o painel abre, mas o navegador **não** oferece instalar nem
-  registra service worker (só `localhost`/HTTPS). Coloque um proxy HTTPS na frente: veja `deploy/Caddyfile.example`
-  (certificado automático) e rode o servidor com `ATENDEIO_COOKIE_SECURE=1`.
-
-### Apps nas lojas (Capacitor: Android e iOS)
-
-O app nativo é o mesmo código, empacotado no aparelho (`pnpm run build:native`) e falando com o **seu** servidor.
-
-1. No servidor: HTTPS (acima) e `ATENDEIO_CORS_ORIGINS=capacitor://localhost,https://localhost` (origens dos apps; vazio
-   por padrão = só mesma origem).
-2. `cd frontend && pnpm run cap:android` (abre o Android Studio) ou `pnpm run cap:ios` (Xcode, só em Mac). Ícones/splash
-   nativos: `pnpm run assets` (a partir de `frontend/resources/`).
-3. Na primeira abertura o app pede o **endereço do servidor** (exige HTTPS; `http://` só para localhost/rede privada, em
-   desenvolvimento — e então ligue `server.cleartext` em `frontend/capacitor.config.ts`). iOS: o aviso de "rede local"
-   aparece ao acessar um servidor na LAN.
-
-Como o login funciona fora do navegador: o cookie `HttpOnly` não vale para o app (origem diferente), então ele usa
-**`POST /api/auth/token`** (mesmas credenciais e o mesmo limite de tentativas do login) e manda `Authorization: Bearer`.
-`<img>` e `EventSource` não enviam cabeçalhos, então vídeo e eventos usam um **tíquete** (`POST /api/cameras/{id}/ticket`):
-assinado (HMAC), vale 60 s, preso a usuário + câmera + tipo + sessão — não abre outra câmera nem o outro tipo, e morre
-com o logout (o vídeo aberto também cai). O navegador **continua só com cookie**: o token nunca chega ao JavaScript do web.
-A checagem de `Origin` em POST/PUT/DELETE segue valendo; só uma origem **listada** em `CORS_ORIGINS` e **sem cookie de
-sessão** passa (sem credencial ambiente não há CSRF). Token do app fica em `@capacitor/preferences` (área privada do app);
-para endurecer, troque por Keychain/Keystore em `core/native-bootstrap.service.ts`.
-
-> **Não verificado aqui:** instalação em celular real, build de APK/IPA (sem Android SDK/Xcode neste ambiente) e HTTPS na LAN.
-> Foram verificados: service worker ativo e controlando a página, cache só da casca, abertura com o servidor desligado
-> (Chrome real, via CDP), os dois builds (`web` e `native`), a API de token/tíquete/CORS contra o uvicorn real e a suíte de testes.
 
 ## Análise de fluxo (por dia e por hora)
 

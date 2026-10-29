@@ -9,15 +9,6 @@ from .resources import low_resource_defaults, total_ram_mb
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def _default_frontend() -> Path:
-    """Interface compilada (Ionic/Angular): a pasta do projeto foi renomeada de `frontend` para `web`; aceita as duas.
-    No instalador (PyInstaller) ela vai em `frontend/www`."""
-    for name in ("web", "frontend"):
-        if (ROOT / name / "www").exists():
-            return ROOT / name / "www"
-    return ROOT / "frontend" / "www"
-
-
 def _env(name: str, default: str) -> str:
     return os.environ.get(f"ATENDEIO_{name}", default)
 
@@ -34,8 +25,6 @@ class Settings:
     host: str = "127.0.0.1"
     port: int = 8000
     # armazenamento
-    static_dir: Path = ROOT / "static"                      # frontend antigo (convive até a virada)
-    frontend_dir: Path = field(default_factory=_default_frontend)   # frontend novo (Ionic/Angular compilado)
     data_dir: Path = ROOT / "data"
     model_path: Path = ROOT / "yolov8n.pt"
     seg_model_path: Path = ROOT / "yolov8n-seg.pt"  # silhuetas (oclusão das áreas); baixa sozinho na 1ª vez
@@ -108,7 +97,6 @@ class Settings:
             host=_env("HOST", cls.host),
             port=int(_env("PORT", str(cls.port))),
             data_dir=Path(_env("DATA", str(cls.data_dir))),
-            frontend_dir=Path(_env("FRONTEND_DIR", str(_default_frontend()))),
             secret_key=_env("SECRET_KEY", ""),
             allow_signup=_env("ALLOW_SIGNUP", "1") == "1",
             cookie_secure=_env("COOKIE_SECURE", "0") == "1",

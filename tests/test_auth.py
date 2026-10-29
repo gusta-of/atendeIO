@@ -2,8 +2,6 @@ def test_requires_login(new_client):
     anon = new_client()
     for path in ("/api/cameras", "/api/states", "/api/local-devices", "/api/auth/me", "/stream?camera=1"):
         assert anon.get(path).status_code == 401, path
-    r = anon.get("/", follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"] == "/login"
 
 
 def test_register_login_logout(new_client):

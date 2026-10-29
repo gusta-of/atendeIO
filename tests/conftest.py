@@ -43,7 +43,7 @@ def video_file(tmp_path):
 
 @pytest.fixture
 def settings(tmp_path):
-    return Settings(data_dir=tmp_path / "data", static_dir=Settings().static_dir,
+    return Settings(data_dir=tmp_path / "data",
                     max_fps=30.0, monitor_fps=30.0, flow_flush_s=0.4, idle_ttl_s=0.1, max_cameras=3, max_cameras_per_user=2,
                     occupy_after_s=0.0, free_after_s=0.0)
 

@@ -72,7 +72,7 @@ Geometria pura em `app/charts/models.py` (+ `tests/test_chart_models.py`); desen
 atendeio/app/       app nativo (Qt)             atendeio/hardware.py   hardware + recomendação de FPS
 atendeio/…          motor (analytics, vision, services, repositories, streaming)
 atendeio/api/       servidor FastAPI (versão web; NÃO usado pelo app nativo)
-web/  desktop/  static/   versão web, Electron e painel antigo (a remover depois de aceita a paridade)
+
 scripts/            recommend_fps.py (usar), seed_flow.py (dados de demonstração), add_user.py/dev_demo.py (versão web)
 tests/              pytest (backend, motor e interface)
 docs/               esta documentação
@@ -80,8 +80,6 @@ docs/               esta documentação
 
 ## Identidade
 
-Identificador do app: **`com.atendeio.app`** (internacional; **não** `br.com`). Está em `web/capacitor.config.ts` (e nos projetos Android/iOS gerados:
-`build.gradle`, `strings.xml`, `MainActivity.java` em `com/atendeio/app`, `project.pbxproj`) e em `desktop/package.json` (`com.atendeio.desktop`).
 Para publicar em loja, troque por um domínio que você controla **antes** do primeiro envio (depois não muda).
 
 ## Empacotamento (ainda não feito para o app nativo)
