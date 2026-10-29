@@ -4,6 +4,7 @@ O utilizador marca na imagem os 4 cantos de um retângulo do chão (ex.: uma mes
 tamanho real dele. A homografia leva qualquer ponto do chão da imagem para a planta, então a pessoa e as áreas caem onde estão
 de verdade, mesmo com a câmera alta ou inclinada. Sem calibração o Mapa usa o mapeamento linear aproximado."""
 
+import math
 from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
 
@@ -75,6 +76,36 @@ class FloorCalib:
         lx = aspect / 2 + (u - 0.5) * self.width * k
         ly = 0.5 + (v - 0.5) * self.depth * k
         return (min(max(lx, -LIMIT * aspect), (1 + LIMIT) * aspect), min(max(ly, -LIMIT), 1 + LIMIT))
+
+    def to_plan_m(self, x: float, y: float, aspect: float) -> Optional[Pt]:
+        """Ponto da imagem -> metros no plano do chão, com origem no centro da zona (ou None se não houver chão ali)."""
+        loc = self.to_local(x, y, aspect)
+        if loc is None:
+            return None
+        k = self.units_per_m(aspect)
+        return ((loc[0] - aspect / 2) / k, (loc[1] - 0.5) / k)
+
+    def foot_sigma_m(self, x: float, y: float, aspect: float, px_err: float = 0.015) -> float:
+        """Incerteza (m) da posição de um pé visto no ponto (x, y) da imagem: o quanto 1,5% de erro no pé desloca o ponto no chão.
+        Cresce longe da câmera (a imagem comprime o chão) e fora do quadrilátero calibrado (extrapolação). Serve para dar mais peso,
+        ao juntar duas câmeras, à que enxerga aquele ponto com mais precisão."""
+        base = self.to_plan_m(x, y, aspect)
+        if base is None:
+            return 3.0
+        d = 0.01
+        sens = 0.0
+        for dx, dy in ((d, 0.0), (0.0, d)):
+            q = self.to_plan_m(x + dx, y + dy, aspect)
+            if q is not None:
+                sens = max(sens, math.hypot(q[0] - base[0], q[1] - base[1]) / d)
+        p = self._h() @ np.array([x, y, 1.0])
+        u, v = (p[0] / p[2], p[1] / p[2]) if abs(p[2]) > 1e-9 else (9.0, 9.0)
+        outside = max(0.0, -u, u - 1.0, -v, v - 1.0)
+        return min(3.0, max(0.05, px_err * sens * (1.0 + 3.0 * outside)))
+
+    def units_per_m(self, aspect: float) -> float:
+        """Unidades locais da zona por metro (a mesma conta de `to_local`)."""
+        return FILL * min(aspect / self.width, 1.0 / self.depth)
 
     def to_dict(self) -> dict:
         return {"pts": [list(p) for p in self.pts], "width": self.width, "depth": self.depth}

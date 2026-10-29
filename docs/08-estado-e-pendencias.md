@@ -22,7 +22,7 @@
 - **Mapa do ambiente** (isométrico 2.5D, `QPainter`): cor por estado, rótulos, alertas configuráveis, resumo por câmera, mini histórico, layout arrastável e salvo por câmera, responsivo.
 - Câmera ociosa é liberada (coletor); encerramento limpo por bandeja, `Ctrl+C` e `SIGTERM`; instância única; tela cheia (F11), abre maximizado.
 - Verificado: nenhuma porta de escuta nem conexão de rede do processo; webcam real + YOLO real; testes de interface com mouse real (offscreen).
-- Testes: **417 passando** (`python -m pytest -q`, ~2 min); detalhes em [12-desenvolvimento.md](12-desenvolvimento.md#testes).
+- Testes: **455 passando** (`python -m pytest -q`, ~2 min); detalhes em [12-desenvolvimento.md](12-desenvolvimento.md#testes).
 
 ## Não verificado
 
@@ -59,7 +59,7 @@
 
 ## Ideias fora do escopo atual
 
-Mapa: exportar PNG, reidentificação entre câmeras, mapa de calor, planta editável com paredes, 3D real (Qt Quick 3D).
+Mapa: exportar PNG, reidentificação por aparência entre câmeras (hoje a união é só por posição no chão, na mesma sala), alinhamento automático das zonas da mesma sala, mapa de calor, planta editável com paredes, 3D real (Qt Quick 3D).
 
 Notificações push; GPU; i18n além do português; modelo treinado com fotos do salão para distinguir prato sujo de limpo; painel web para o dono ver pelo celular (leria da nuvem).
 

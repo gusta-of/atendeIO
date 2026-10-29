@@ -84,6 +84,7 @@ class CameraHub:
         self._conn_key = None
         self.events.emit("change", "hub.started", {"camera": cam_id})
 
+        self._geom_provider, self._geom_cache = None, {}
         self._items = frozenset(settings.table_item_classes)
         self._tracker = PersonTracker()
         self._people_counter = PeopleCounter()
@@ -309,6 +310,21 @@ class CameraHub:
             except Exception as e:
                 print(f"[-] histórico de fluxo da câmera {self.cam_id}: {type(e).__name__}")
 
+    def set_geometry(self, provider) -> None:
+        """`provider(aspecto) -> CameraGeometry|None` (chão calibrado): as mesas passam a ser decididas em metros. None = regra por imagem."""
+        self._geom_provider, self._geom_cache = provider, {}
+        self._analyzer.set_geometry(self._geometry if provider is not None else None)
+
+    def _geometry(self, aspect: float):
+        key = round(aspect, 3)
+        if key not in self._geom_cache:
+            try:
+                self._geom_cache[key] = self._geom_provider(aspect) if self._geom_provider else None
+            except Exception as e:                       # calibração ruim não derruba a câmera: volta para a regra por imagem
+                print(f"[-] câmera {self.cam_id}: geometria do chão ignorada ({type(e).__name__})")
+                self._geom_cache[key] = None
+        return self._geom_cache[key]
+
     def _build_state(self, dets: list, shape, now: float) -> dict:
         """Inventário por classe, pessoas na área da câmera e análise das áreas do utilizador."""
         state = summarize(dets)
@@ -431,6 +447,12 @@ class CameraHub:
     def unsubscribe(self, q) -> None:
         with self._pub_lock:
             self._subs = [x for x in self._subs if x[1] is not q]
+
+    def last_frame(self):
+        """Cópia do último quadro lido (BGR) ou None. Só para o piso do Mapa: vive na memória, nunca é gravado."""
+        with self._cv:
+            f = self._frame
+        return None if f is None else f.copy()
 
     def snapshot_state(self) -> dict:
         with self._pub_lock:

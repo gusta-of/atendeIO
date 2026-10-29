@@ -4,7 +4,7 @@ remover. Tudo o que a câmera tem num lugar só."""
 from typing import Optional
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QCompleter, QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
                                QPushButton, QSpinBox, QVBoxLayout)
 
 from ...errors import DomainError
@@ -46,6 +46,11 @@ class EditCameraDialog(QDialog):
         self.name = QLineEdit(self.cam["name"])
         self.name.setMaxLength(60)
         form.addRow("Nome", self.name)
+        self.room = QLineEdit(self.cam.get("room") or "")
+        self.room.setMaxLength(40)
+        self.room.setPlaceholderText("ex.: Salão — câmeras na mesma sala contam cada pessoa uma vez")
+        self.room.setCompleter(QCompleter(core.rooms(), self.room))
+        form.addRow("Sala (opcional)", self.room)
         if self.rtsp:
             host, port, path = rtsp.parse_ref(self.cam["ref"])
             self.brand = QComboBox()
@@ -175,6 +180,7 @@ class EditCameraDialog(QDialog):
                                                          self.path.text(), self.user.text() or None, self.password.text() or None))
         else:
             steps.append(lambda: self.core.update_camera(self.cam_id, name=self.name.text()))
+        steps.append(lambda: self.core.set_camera_room(self.cam_id, self.room.text()))
         steps.append(lambda: self.core.set_recognition(self.cam_id, self.recognize.isChecked(),
                                                        self.core.recognition(self.cam_id)["classes"]))
         steps.append(lambda: self.core.set_fps(self.cam_id, self.fps_view.value(), self.fps_monitor.value()))

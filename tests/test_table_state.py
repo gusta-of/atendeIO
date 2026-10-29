@@ -196,7 +196,7 @@ def test_status_follows_the_smoothed_count_shown_on_screen():
 def test_person_close_to_the_camera_covering_the_table_in_the_image_is_not_at_the_table():
     """Passar na frente da câmera cobre a mesa na imagem, mas os pés estão bem abaixo da base dela: não é da mesa."""
     a = ZoneAnalyzer(CFG, [Zone(1, "Mesa 1", "mesa", ((0.1, 0.1), (0.5, 0.1), (0.5, 0.3), (0.1, 0.3)))])   # mesa longe: y de 0,1 a 0,3
-    close = (1, (0.05, 0.0, 0.6, 0.97))                          # corpo cobre a mesa; pés em 0,97 (bem à frente dela)
+    close = (1, (0.05, 0.0, 0.6, 0.985))                         # corpo cobre a mesa; pés na borda de baixo (fora do quadro: muito à frente)
     cut = (1, (0.05, 0.0, 0.6, 1.0))                             # colada na borda de baixo: pés fora do quadro
     for t in (0, 4, 8):
         assert status(a, [close], [], t)["people"] == 0
@@ -226,3 +226,16 @@ def test_person_walking_in_front_of_the_camera_still_does_not_take_that_small_ta
     a = ZoneAnalyzer(CFG, [Zone(2, "Mesa 2", "mesa", pts)])
     near = (1, (0.15, 0.0, 0.55, 1.0))                           # enorme e colada embaixo: muito mais perto da câmera
     assert a.update([near], [], 0, 16 / 9)["areas"][0]["people"] == 0
+
+
+def test_person_seated_beside_a_high_drawn_table_still_counts_real_case():
+    """Caso real (Câmera IP, mesa movida): polígono pequeno no alto da imagem (y 0,23–0,31) e a pessoa sentada ao lado, pés em ~0,72."""
+    pts = ((0.30, 0.25), (0.40, 0.23), (0.42, 0.29), (0.31, 0.31))
+    a = ZoneAnalyzer(CFG, [Zone(2, "Mesa 2", "mesa", pts)])
+    seated = (1, (0.10, 0.12, 0.40, 0.72))
+    assert a.update([seated], [], 0, 16 / 9)["areas"][0]["people"] == 1
+    assert a.update([seated], [], 4, 16 / 9)["areas"][0]["status"] == "ocupada"
+    # a mesma mesa, mas alguém passando ENORME e colado embaixo (pés fora do quadro) continua sem contar
+    b = ZoneAnalyzer(CFG, [Zone(2, "Mesa 2", "mesa", pts)])
+    near = (1, (0.05, 0.0, 0.55, 1.0))
+    assert b.update([near], [], 0, 16 / 9)["areas"][0]["people"] == 0

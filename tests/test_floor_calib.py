@@ -74,3 +74,21 @@ def test_floor_corners_may_be_outside_the_image():
     c = FloorCalib(out, 6.0, 4.0)
     inside = c.to_local(0.5, 0.8, ASPECT)
     assert inside is not None and 0.0 < inside[0] < ASPECT and 0.0 < inside[1] < 1.0
+
+
+def test_foot_uncertainty_grows_with_distance_and_outside_the_calibrated_floor():
+    c = FloorCalib(PTS, 4.0, 3.0)
+    near, far = c.foot_sigma_m(0.5, 0.88, ASPECT), c.foot_sigma_m(0.5, 0.42, ASPECT)
+    assert far > near > 0                                        # a imagem comprime o chão longe da câmera: o mesmo erro vale mais metros
+    inside, outside = c.foot_sigma_m(0.5, 0.6, ASPECT), c.foot_sigma_m(0.5, 0.15, ASPECT)
+    assert outside > inside                                      # fora do quadrilátero calibrado é extrapolação
+
+
+def test_merging_weights_the_camera_that_sees_the_point_more_precisely():
+    from atendeio.app.room_merge import Dot, merge
+    precise = Dot(1, 1, 0.0, 0.0, "S", 2.0, 0.05)
+    vague = Dot(2, 1, 0.6, 0.0, "S", 2.0, 0.40)                  # 0,3 m de distância (UPM 2)
+    people, dup = merge([precise, vague])
+    assert dup == 1 and people[0].x < 0.6 * 0.1                  # fica quase em cima da câmera precisa (peso ~64× maior)
+    equal, _ = merge([Dot(1, 1, 0.0, 0.0, "S", 2.0, 0.2), Dot(2, 1, 0.6, 0.0, "S", 2.0, 0.2)])
+    assert equal[0].x == pytest.approx(0.3)                      # iguais: média simples

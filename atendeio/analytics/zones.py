@@ -4,8 +4,9 @@ import threading
 from collections import deque
 from dataclasses import dataclass
 from statistics import median
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
+from .camera_geometry import CameraGeometry
 from .geometry import (box_overlap_fraction, feet_in_zone, membership_score, point_in_polygon,
                        point_polygon_distance)
 
@@ -35,7 +36,11 @@ class AnalyticsConfig:
     clean_after_s: float = 20.0   # sem objetos por isso, "a limpar" vira "livre"
     people_window: int = 9        # amostras na mediana de pessoas (estabiliza a contagem)
     overlap_min: float = 0.35     # pontuação mínima (ver geometry.membership_score) pra contar na área
-    table_feet_tol: float = 0.06  # mesa: folga (fração do quadro) além do chão estimado da mesa; passou disso = a pessoa está na frente dela
+    table_feet_tol: float = 0.08  # mesa: folga (fração do quadro) além do chão estimado da mesa; passou disso = a pessoa está na frente dela
+
+
+LOCALIZATION_M = 0.3   # incerteza (m) da posição da pessoa e da pegada da mesa com chão calibrado: some-se à sombra de assentos
+FLOOR_DROP = 0.62   # chão da mesa abaixo do polígono = isto × altura da pessoa na imagem (calibrado com casos reais: sentado encostado vs passando na frente)
 
 
 def _center(box) -> Tuple[float, float]:
@@ -103,8 +108,17 @@ class ZoneAnalyzer:
         self._lock = threading.Lock()
         self._zones: Tuple[Zone, ...] = ()
         self._tables: Dict[int, _Table] = {}
+        self._geom: Optional[Callable[[float], Optional[CameraGeometry]]] = None   # aspecto -> geometria da câmera (chão calibrado), ou None
+        self._foot_cache: dict = {}
         self._waiting: Dict[int, Dict[int, float]] = {}  # fila: id -> quando chegou
         self.set_zones(zones)
+
+    def set_geometry(self, provider: Optional[Callable[[float], Optional[CameraGeometry]]]) -> None:
+        """Com o chão calibrado, as mesas passam a ser decididas em METROS (pegada da mesa × posição da pessoa no chão), para qualquer posição
+        de câmera. Sem isso, vale a regra por imagem (mais aproximada)."""
+        with self._lock:
+            self._geom = provider
+            self._foot_cache.clear()
 
     @property
     def has_zones(self) -> bool:
@@ -123,19 +137,19 @@ class ZoneAnalyzer:
                     del store[zid]
 
     @staticmethod
-    def _affinity(box, z: Zone, ar: float, min_score: float, feet_tol: float = 0.06) -> float:
+    def _affinity(box, z: Zone, ar: float, min_score: float, feet_tol: float = 0.08) -> float:
         """0 = a pessoa não é desta mesa; >0 = é (quanto maior, mais ligada). Duas formas de ser da mesa:
         sobrepor/cobrir a mesa, ou estar SENTADA na sombra de assentos: o CORPO (a caixa da pessoa, da altura
         do peito pra baixo) a até `margin` da borda da mesa. Quem senta ao lado fica fora do polígono, mas
         encostado na sombra, e é da mesa.
 
         Antes disso, a posição NO CHÃO: o polígono da mesa é desenhado no TAMPO, então o chão dela fica abaixo dele
-        (~0,5 da altura de uma pessoa naquela profundidade). Quem pisa além disso (mais `feet_tol`) está NA FRENTE da mesa,
+        (~0,6 da altura de uma pessoa naquela profundidade, com folga para quem senta de lado). Quem pisa além disso (mais `feet_tol`) está NA FRENTE da mesa,
         mais perto da câmera: cobre a mesa na imagem mas não está nela. Caixa colada na borda de baixo = pés fora do quadro,
         conta como bem abaixo. A folga cresce com o tamanho da pessoa, então quem está encostado na mesa (mesmo longe
         da câmera, com a mesa alta na imagem) continua contando."""
-        feet = box[3] + (0.15 if box[3] >= 0.985 else 0.0)
-        floor = max(y for _, y in z.points) + 0.5 * max(feet - box[1], 0.0)      # onde a mesa pisa no chão, na imagem
+        feet = box[3] + (0.25 if box[3] >= 0.985 else 0.0)
+        floor = max(y for _, y in z.points) + FLOOR_DROP * max(feet - box[1], 0.0)   # onde a mesa pisa no chão, na imagem
         if feet > floor + feet_tol:
             return 0.0
         over = membership_score(box, z.points)
@@ -149,6 +163,28 @@ class ZoneAnalyzer:
             if d <= z.margin:
                 best = max(best, 1.0 - d / z.margin + 1e-6)  # +epsilon: na borda exata ainda conta
         return best
+
+    def _footprint(self, z: Zone, geom: CameraGeometry):
+        """A pegada da mesa no chão (m), em cache enquanto a mesa e a geometria forem as mesmas."""
+        key = (z.id, id(geom), z.points)
+        if key not in self._foot_cache:
+            if len(self._foot_cache) > 64:
+                self._foot_cache.clear()
+            self._foot_cache[key] = geom.table_footprint(z.points)
+        return self._foot_cache[key]
+
+    @staticmethod
+    def _metric_affinity(options, foot, z: Zone) -> float:
+        """0 = longe da mesa; >0 = na pegada ou a até a "sombra de assentos" (m) dela, mais a incerteza de posição (`LOCALIZATION_M`: a calibração
+        com 4 pontos e a altura da pessoa não dão centímetros). `options` são as posições plausíveis da pessoa (em pé / sentada): vale a mais
+        perto da mesa. `margin` da área (fração do quadro, 0,06 padrão) vira metros na mesma proporção: 0,06 -> 0,6 m."""
+        if not options:
+            return 0.0
+        margin_m = min(1.5, max(0.0, z.margin) / 0.06 * 0.6) + LOCALIZATION_M
+        d = min(point_polygon_distance(p[0], p[1], foot) for p in options)
+        if d <= 0.0:
+            return 1.0 + 1e-6
+        return (1.0 - d / margin_m + 1e-6) if d <= margin_m else 0.0
 
     def reset(self) -> None:
         """Esquece o estado das mesas e da fila (as áreas desenhadas continuam)."""
@@ -175,8 +211,16 @@ class ZoneAnalyzer:
             min_score = self._cfg.overlap_min
             tables = [z for z in self._zones if z.kind == "mesa"]
             # mesa: afinidade = maior entre (sobreposição) e (proximidade à borda, dentro da sombra de assentos)
-            score = {z.id: {tid: self._affinity(box, z, ar, min_score, self._cfg.table_feet_tol) for tid, box in people}
-                     for z in tables}
+            geom = self._geom(ar) if self._geom is not None else None
+            metric = geom is not None and geom.valid
+            floor_pos = {tid: geom.person_floor_options(box) for tid, box in people} if metric else {}
+            score = {}
+            for z in tables:
+                foot = self._footprint(z, geom) if metric else None
+                if foot is not None:
+                    score[z.id] = {tid: self._metric_affinity(floor_pos.get(tid), foot, z) for tid, _b in people}     # em metros
+                else:
+                    score[z.id] = {tid: self._affinity(box, z, ar, min_score, self._cfg.table_feet_tol) for tid, box in people}
             members = {}
             for z in self._zones:
                 if z.kind == "mesa":

@@ -267,3 +267,102 @@ def test_an_old_database_gets_the_rotation_column(tmp_path):
     db.init()
     c = sqlite3.connect(path)
     assert "rot" in {r[1] for r in c.execute("PRAGMA table_info(map_layout)")}
+
+
+def test_camera_room_is_saved_cleaned_listed_and_isolated_by_owner(core):
+    a, b = [core.add_local(p, n)["id"] for p, n in zip(core.paths[:2], "AB")]
+    assert core.cameras()[0]["room"] == ""
+    assert core.set_camera_room(a, "  Salão   principal \n") == "Salão principal"
+    core.set_camera_room(b, "x" * 90)
+    cams = {c["id"]: c for c in core.cameras()}
+    assert cams[a]["room"] == "Salão principal" and len(cams[b]["room"]) == 40
+    assert core.rooms() == sorted(core.rooms(), key=str.lower) and "Salão principal" in core.rooms()
+    core.set_camera_room(a, "")
+    assert core.cameras()[0]["room"] == ""
+    with pytest.raises(NotFoundError):
+        core.set_camera_room(9999, "X")
+
+
+def test_an_old_database_gets_the_room_column(tmp_path):
+    import sqlite3
+    from atendeio.db import Database
+    path = tmp_path / "old2.db"
+    c = sqlite3.connect(path)
+    c.executescript("CREATE TABLE cameras (id INTEGER PRIMARY KEY, user_id INTEGER, name TEXT, kind TEXT, ref TEXT, secret BLOB, "
+                    "monitor INTEGER NOT NULL DEFAULT 0, monitor_from TEXT, monitor_to TEXT, recognition INTEGER NOT NULL DEFAULT 1, "
+                    "classes TEXT NOT NULL DEFAULT '[]', created REAL NOT NULL DEFAULT 0);")
+    c.commit(); c.close()
+    Database(path).init()
+    assert "room" in {r[1] for r in sqlite3.connect(path).execute("PRAGMA table_info(cameras)")}
+
+
+def _room_frame(seed, shift=0):
+    import cv2
+    import numpy as np
+    rng = np.random.default_rng(seed)
+    img = np.full((360, 640, 3), 90, np.uint8)
+    for _ in range(14):
+        x, y = int(rng.integers(0, 560)), int(rng.integers(0, 300))
+        cv2.rectangle(img, (x, y), (x + int(rng.integers(40, 140)), y + int(rng.integers(30, 110))), tuple(int(c) for c in rng.integers(20, 235, 3)), -1)
+    img = cv2.GaussianBlur(img, (5, 5), 0)
+    return cv2.warpAffine(img, np.float32([[1, 0, shift], [0, 1, shift / 3]]), (640, 360), borderMode=cv2.BORDER_REPLICATE)
+
+
+def test_a_moved_camera_is_noticed_only_after_it_persists_and_remapping_confirms_the_new_view(core, monkeypatch):
+    cid = core.add_local(core.paths[0], "A")["id"]
+    core.map_enter()
+    assert wait(lambda: core.c.registry.get(cid) is not None and core.c.registry.get(cid).online)
+    hub = core.c.registry.get(cid)
+    scene = {"f": _room_frame(1)}
+    from atendeio.streaming.hub import CameraHub
+    monkeypatch.setattr(CameraHub, "last_frame", lambda self: scene["f"].copy())     # QUALQUER hub (a câmera de arquivo reinicia) vê esta cena
+    for _ in range(5):
+        core.watch_views(force=True)                                    # 5 quadros: nasce a referência (64 bytes, sem imagem)
+    saved = core.c.cameras._cameras.get_view_sig(cid)
+    assert saved is not None and len(saved) == 64 and core.view_changed_ids() == {}
+    import numpy as np
+    scene["f"] = np.clip(_room_frame(1).astype(np.int16) * 1.2 + 10, 0, 255).astype(np.uint8)
+    for _ in range(6):
+        core.watch_views(force=True)
+    assert core.view_changed_ids() == {}
+    scene["f"] = _room_frame(1, shift=80)                               # câmera movida
+    def noticed():                                                      # a janela de 5 quadros se renova; a mudança precisa persistir 2 ciclos
+        core.watch_views(force=True)                                    # (a câmera de arquivo reinicia e fica "offline" por instantes: pula esses ciclos)
+        return bool(core.view_changed_ids())
+    assert wait(noticed, timeout=10)
+    assert cid in core.view_changed_ids()                               # persistiu: avisa
+    assert core.map_snapshot()["cameras"][0]["view_changed"] is True
+    core.replace_zones(cid, [])                                         # o utilizador remapeou as áreas: a cena de agora vira a referência
+    assert core.view_changed_ids() == {}
+    for _ in range(6):
+        core.watch_views(force=True)
+    assert core.view_changed_ids() == {} and core.map_snapshot()["cameras"][0]["view_changed"] is False
+
+
+def test_accept_view_clears_the_warning_and_is_isolated_by_owner(core):
+    cid = core.add_local(core.paths[0], "A")["id"]
+    core._view_changed[cid] = 0.9
+    core.accept_view(cid)
+    assert core.view_changed_ids() == {}
+    with pytest.raises(NotFoundError):
+        core.accept_view(9999)
+
+
+def test_calibrating_the_floor_switches_the_tables_of_that_camera_to_metric_decisions_live_and_on_new_hubs(core):
+    cid = core.add_local(core.paths[0], "A")["id"]
+    core.map_enter()
+    assert wait(lambda: core.c.registry.get(cid) is not None)
+    hub = core.c.registry.get(cid)
+    assert hub._analyzer._geom is None                                    # sem calibração: regra por imagem
+    pts = [(0.3, 0.4), (0.7, 0.4), (0.95, 0.95), (0.05, 0.95)]
+    core.set_map_calibration(cid, pts, 4.0, 3.0)
+    assert hub._analyzer._geom is not None                               # aplicado ao hub vivo
+    geom = hub._analyzer._geom(16 / 9)
+    assert geom is not None and geom.valid and geom.height_m > 0           # câmera recuperada (posição e inclinação)
+    core.map_leave()
+    core.c.registry.stop_camera(cid)
+    core.map_enter()
+    assert wait(lambda: core.c.registry.get(cid) is not None)
+    assert core.c.registry.get(cid)._analyzer._geom is not None          # um hub novo já nasce com a geometria
+    core.clear_map_calibration(cid)
+    assert core.c.registry.get(cid)._analyzer._geom is None

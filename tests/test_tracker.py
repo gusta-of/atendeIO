@@ -33,3 +33,17 @@ def test_new_person_gets_new_id():
     first = t.update([box(0.1)], 0.0)[0][0]
     ids = [i for i, _ in t.update([box(0.1), box(0.8)], 0.1)]
     assert ids[0] == first and ids[1] != first
+
+
+def test_fast_walker_keeps_the_id_even_when_boxes_barely_overlap():
+    """A 4 leituras/s quem anda rápido anda mais que a própria largura entre dois quadros: IoU ~0, mas é a mesma pessoa."""
+    t = PersonTracker()
+    first = t.update([box(0.10)], 0.0)[0][0]
+    assert t.update([box(0.22)], 0.25)[0][0] == first          # saltou 0,12 (> largura 0,1): sem sobreposição
+    assert t.update([box(0.34)], 0.5)[0][0] == first
+
+
+def test_far_away_person_is_still_a_new_id():
+    t = PersonTracker()
+    first = t.update([box(0.10)], 0.0)[0][0]
+    assert t.update([box(0.80)], 0.25)[0][0] != first

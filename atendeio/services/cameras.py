@@ -27,7 +27,7 @@ class CameraService:
 
     def _public(self, cam: dict) -> dict:
         """Visão segura pro cliente: nunca inclui `secret`."""
-        view = {"id": cam["id"], "name": cam["name"], "kind": cam["kind"], "ref": cam["ref"]}
+        view = {"id": cam["id"], "name": cam["name"], "kind": cam["kind"], "ref": cam["ref"], "room": cam.get("room") or ""}
         if self._creds is not None and cam["kind"] == "rtsp":
             view["needs_credentials"] = not self._creds.has(cam["id"])
         return view
@@ -110,6 +110,14 @@ class CameraService:
             raise ValidationError("Câmera USB não tem endereço de rede para editar.")
         self._cameras.update_basic(cam_id, user_id, new_name, ref)
         return self._public(self.get_owned(cam_id, user_id))
+
+    def set_room(self, cam_id: int, user_id: int, room: Optional[str]) -> str:
+        """Sala da câmera (texto livre, até 40 caracteres; vazio = sem sala). Câmeras do mesmo dono com a mesma sala (sem
+        distinguir maiúsculas) são tratadas como vendo o mesmo ambiente."""
+        self.get_owned(cam_id, user_id)
+        clean = re.sub(r"[\x00-\x1f\x7f]", "", re.sub(r"\s+", " ", (room or "").strip()))[:40]
+        self._cameras.update_room(cam_id, user_id, clean)
+        return clean
 
     def delete(self, cam_id: int, user_id: int) -> None:
         if not self._cameras.delete(cam_id, user_id):

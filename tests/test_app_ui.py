@@ -1046,10 +1046,11 @@ def test_ctrl_drag_moves_a_zone_without_the_move_mode_and_plain_drag_still_pans(
         x0, y0, x1, y1 = before
         start = view.projector().project((x0 + x1) / 2, (y0 + y1) / 2, 0)
         p0 = QPoint(int(start[0]), int(start[1]))
-        offset = view._o
+        centre = (view.view_state()["cx"], view.view_state()["cy"])
         drag(Qt.KeyboardModifier.ControlModifier)                                          # com Ctrl: move a zona
         after = page.scene.section(b).rect
-        assert (after[0], after[1]) != (before[0], before[1]) and view._o == offset
+        assert (after[0], after[1]) != (before[0], before[1])
+        assert (view.view_state()["cx"], view.view_state()["cy"]) == pytest.approx(centre, abs=1e-6)   # e a vista não se deslocou
         assert b in core.map_layouts() and a not in core.map_layouts()                     # salvo só para a zona movida
         win.quit_app()
     finally:
@@ -1086,3 +1087,263 @@ def test_map_view_angle_zoom_and_position_are_saved_and_restored_even_in_a_diffe
     again.view.fit_to_screen(force=True)                                 # "Ajustar" ainda reenquadra
     assert again.view.view_state()["k"] != pytest.approx(want["k"])
     again.leave()
+
+
+def test_edit_dialog_sets_the_room_and_the_map_counts_a_shared_person_once(qapp, core, video_file):
+    from atendeio.app.ui.edit_camera_dialog import EditCameraDialog
+    cam = core.add_local(str(video_file), "A")["id"]
+    dlg = EditCameraDialog(core, cam)
+    dlg.room.setText("Salão")
+    dlg.save()
+    assert core.cameras()[0]["room"] == "Salão"
+    again = EditCameraDialog(core, cam)
+    assert again.room.text() == "Salão"
+
+
+def test_aligning_a_room_with_a_walking_person_makes_the_two_zones_coincide(qapp, settings, tmp_path):
+    from atendeio.app.ui.map_page import MapPage
+    core = _make_map_core(settings, tmp_path, 2)
+    try:
+        _align_scenario(core, MapPage)
+    finally:
+        core.stop()
+
+
+def _align_scenario(core, MapPage):
+    a, b = [core.add_local(p, f"C{i}")["id"] for i, p in enumerate(core.paths)]
+    for cid in (a, b):
+        core.set_camera_room(cid, "Salão")
+        core.set_map_calibration(cid, [(0.3, 0.3), (0.7, 0.3), (0.95, 0.95), (0.05, 0.95)], 4.0, 3.0)    # a mesma calibração nas duas
+    page = MapPage(core)
+    page.open({a, b})
+    page.tick()
+    assert page._room_peer(b) == a and page._room_peer(a) == b
+    page.select(b, 0)
+    page._align_start()
+    assert page._align is not None
+    for i in range(12):                                                  # uma pessoa anda; as duas câmeras a veem no mesmo ponto do chão
+        x, y = 0.3 + 0.04 * i, 0.5 + 0.03 * (i % 5)
+        st = {"size": [640, 360], "online": True, "areas": [], "people": 1, "tracks": [{"id": 1, "x": x, "y": y}]}
+        snap = {"cameras": page.snap["cameras"], "zones": page.snap["zones"], "states": {a: st, b: st}, "limited": []}
+        page.snap = snap
+        page._collect_align(snap)
+    page._align["until"] = 0.0
+    snap = page.snap
+    page._collect_align(snap)
+    assert page._align is None and "Alinhado" in page.align_msg.text()
+    la, lb = page._layout_of(a), page.layouts[b]
+    assert (lb.x, lb.y, lb.scale, lb.rot) == pytest.approx((la.x, la.y, la.scale, la.rot), abs=1e-6)     # mesma posição, escala e giro
+    assert core.map_layouts()[b][:2] == pytest.approx((la.x, la.y), abs=1e-6)                          # e salvo
+    page.snap = snap
+    page._rebuild()                                                      # com as zonas coincidindo, a mesma pessoa conta uma vez
+    assert page.scene.totals["duplicates"] == 1 and len(page.scene.crowd) == 1
+    page.leave()
+
+
+def test_align_explains_what_is_missing(qapp, core, video_file):
+    from atendeio.app.ui.map_page import MapPage
+    a = core.add_local(str(video_file), "A")["id"]
+    page = MapPage(core)
+    page.open({a})
+    page.tick()
+    page.select(a, 0)
+    page._align_start()
+    assert page._align is None and "Sala" in page.align_msg.text()
+    page.leave()
+
+
+def test_map_side_panel_keeps_a_fixed_width_and_wraps_long_text(qapp, core, video_file):
+    from atendeio.app.ui.map_page import SIDE_W, MapPage
+    core.add_local(str(video_file), "A")
+    page = MapPage(core)
+    page.resize(1500, 800)
+    page.show()
+    qapp.processEvents()
+    assert page.side.width() == SIDE_W and page.side.minimumWidth() == page.side.maximumWidth() == SIDE_W
+    before = page.side.minimumSizeHint().width()
+    page.t_people.setText("<b>2</b> pessoa(s) em 2/2 câmera(s) ao vivo · " + "1 vista(s) por mais de uma câmera, contada(s) uma vez " * 4)
+    page.align_msg.setText("Alinhado (erro médio 51 cm). " * 12)
+    qapp.processEvents()
+    assert page.side.width() == SIDE_W and page.side.minimumSizeHint().width() == before   # não cresceu
+    assert page.t_people.wordWrap() and page.t_people.sizeHint().width() <= SIDE_W * 3         # e o texto quebra linha
+    page.close()
+
+
+def test_map_draws_a_clean_room_shaped_like_the_calibrated_floor_and_never_the_camera_image(qapp, settings, tmp_path):
+    from atendeio.app import map_model as M
+    from atendeio.app.floor_calib import FloorCalib
+    from atendeio.app.ui.map_view import IsoMapView
+    cam = {"id": 1, "name": "A"}
+    st = {"size": [1600, 900], "online": True, "areas": [], "people": 0}
+    cal = FloorCalib(((0.3, 0.4), (0.7, 0.4), (0.9, 0.9), (0.1, 0.9)), 6.0, 3.0)
+    scene = M.build_scene([cam], {1: []}, {1: st}, {1: M.Layout(0, 0, 1.0, 0)}, calibs={1: cal})
+    sec = scene.sections[0]
+    assert len(sec.floor) == 4 and sec.floor_m == (6.0, 3.0)
+    (x0, y0), (x1, y1), (x2, y2), (_x3, _y3) = sec.floor
+    k = cal.units_per_m(1600 / 900)
+    assert ((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5 == pytest.approx(6.0 * k)             # o chão tem as medidas reais (largura)
+    assert ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5 == pytest.approx(3.0 * k)             # e a profundidade
+    plain = M.build_scene([cam], {1: []}, {1: st}, {}).sections[0]
+    assert plain.floor == [] and plain.floor_m is None                                    # sem calibração: sem sala
+    v = IsoMapView()
+    v.resize(900, 600)
+    v.set_scene(scene, refit=True)
+    img = v.grab().toImage()
+    assert not hasattr(v, "floors")                                                       # a imagem da câmera nunca é desenhada
+    # a sala aparece: há pixels da cor do chão e da grade (não é só o fundo escuro)
+    colors = {img.pixelColor(x, y).name() for x in range(0, 900, 25) for y in range(0, 600, 25)}
+    assert "#1c2740" in colors
+
+
+def test_map_collects_camera_images_only_for_cameras_with_a_room_and_keeps_them_in_memory(qapp, settings, tmp_path):
+    from atendeio.app.ui.map_page import MapPage
+    core = _make_map_core(settings, tmp_path, 2)
+    try:
+        a, b = [core.add_local(p, f"C{i}")["id"] for i, p in enumerate(core.paths)]
+        for cid in (a, b):
+            core.set_map_calibration(cid, [(0.3, 0.4), (0.7, 0.4), (0.9, 0.9), (0.1, 0.9)], 4.0, 3.0)
+        core.set_camera_room(a, "Salão")                                              # só a "a" tem sala
+        page = MapPage(core)
+        page.FLOOR_FAST_S = 0.0
+        page.resize(1100, 700)
+        page.show()
+        page.open({a, b})
+        assert pump(qapp, lambda: (page.tick() or True) and a in page._floor, timeout=10)
+        assert b not in page._floor                                                   # sem sala: não colhe nada
+        assert not hasattr(page, "floor_btn")
+        page.leave()
+    finally:
+        core.stop()
+
+
+def test_align_by_floor_images_works_in_a_crowded_room_without_a_lone_person(qapp, settings, tmp_path):
+    import math as _m
+    from atendeio.app.floor_texture import FloorMedian
+    from atendeio.app.ui.map_page import MapPage
+    from tests.test_room_align import _floor_world, _view
+    core = _make_map_core(settings, tmp_path, 2)
+    try:
+        a, b = [core.add_local(p, f"C{i}")["id"] for i, p in enumerate(core.paths)]
+        for cid in (a, b):
+            core.set_camera_room(cid, "Salão")
+            core.set_map_calibration(cid, [(0.3, 0.3), (0.7, 0.3), (0.95, 0.95), (0.05, 0.95)], 6.0, 2.8)     # 100 px por metro na textura 700x400
+        page = MapPage(core)
+        page.open({a, b})
+        page.tick()
+        for cid in (a, b):
+            page.snap["states"][cid] = {"size": [700, 400], "online": True, "areas": [], "people": 50, "tracks": []}
+        world = _floor_world()
+        import cv2
+        import numpy as np
+        rng = np.random.default_rng(2)
+        for cid, tex in ((a, _view(world, (600.0, 500.0), 0.0)), (b, _view(world, (780.0, 540.0), _m.radians(15)))):
+            for _ in range(60):                                            # 60 pessoas na sala, em cada imagem
+                cv2.circle(tex, (int(rng.integers(0, 700)), int(rng.integers(0, 400))), 10, (20, 20, 220, 255), -1)
+            med = FloorMedian()
+            for _ in range(3):
+                med.add(tex.copy())
+            page._floor[cid] = med
+        page.select(b, 0)
+        page._align_start()
+        assert page._align is None and "Alinhado" in page.align_msg.text()        # alinhou pelas imagens, sem esperar ninguém andar
+        assert page.layouts[b].rot == pytest.approx(15.0, abs=3.0)
+        assert core.map_layouts()[b][3] == pytest.approx(page.layouts[b].rot)
+        page.leave()
+    finally:
+        core.stop()
+
+
+def test_map_view_switches_to_dots_in_a_crowded_room_and_keeps_painting_fast(qapp):
+    import time as _t
+    from atendeio.app import map_model as M
+    from atendeio.app.ui.map_view import CROWD_FROM, IsoMapView
+    v = IsoMapView()
+    v.resize(900, 600)
+    cam = {"id": 1, "name": "Salão"}
+
+    def scene(dx):
+        tracks = [{"id": i, "x": 0.1 + 0.8 * (i % 10) / 10 + dx, "y": 0.3 + 0.6 * (i // 10) / 6} for i in range(60)]
+        return M.build_scene([cam], {1: []}, {1: {"size": [640, 480], "online": True, "areas": [], "people": 60, "tracks": tracks}}, {})
+    v.set_scene(scene(0.0), refit=True)
+    v.set_scene(scene(0.02))
+    assert len(v._markers) == 60 >= CROWD_FROM
+    t0 = _t.perf_counter()
+    for _ in range(5):
+        v.grab()
+    assert (_t.perf_counter() - t0) / 5 < 0.25                           # 60 pessoas, tela cheia, renderização por software
+    few = scene(0.0)
+    few.sections[0].people = few.sections[0].people[:3]
+    few.crowd = few.crowd[:3]
+    v.set_scene(few)
+    assert v.grab() is not None
+
+
+def test_camera_tile_warns_when_the_scene_changed_and_accepting_clears_it(qapp, core, video_file):
+    cam = core.add_local(str(video_file), "A")["id"]
+    win = MainWindow(core, Bridge(), QIcon())
+    win.show()
+    win._check(cam)
+    tile = win._tiles[cam]
+    tile._tick()
+    assert tile._moved.isHidden()
+    core._view_changed[cam] = 0.8                                          # a vigia da cena detectou mudança
+    tile._tick()
+    assert not tile._moved.isHidden()
+    tile._accept_view()
+    assert tile._moved.isHidden() and core.view_changed_ids() == {}
+    win.quit_app()
+
+
+def test_camera_names_of_one_room_share_one_caption_anchored_on_the_room_floor(qapp):
+    from atendeio.app import map_model as M
+    from atendeio.app.floor_calib import FloorCalib
+    from atendeio.app.ui.map_view import IsoMapView
+    cal = FloorCalib(((0.3, 0.4), (0.7, 0.4), (0.9, 0.9), (0.1, 0.9)), 4.0, 4.0)
+    cams = [{"id": 1, "name": "WebCan", "room": "Sala1"}, {"id": 2, "name": "Camera IP", "room": "sala1"}, {"id": 3, "name": "Cozinha"}]
+    st = {"size": [640, 480], "online": True, "areas": [], "people": 0}
+    sc = M.build_scene(cams, {1: [], 2: [], 3: []}, {1: st, 2: st, 3: st},
+                       {1: M.Layout(0, 0, 1.0), 2: M.Layout(0.6, 0.4, 1.0, 20.0), 3: M.Layout(9.0, 0.0, 1.0)}, calibs={1: cal, 2: cal})
+    v = IsoMapView()
+    v.resize(900, 600)
+    v.set_scene(sc, refit=True)
+    drawn = []
+    from PySide6.QtGui import QPainter
+    orig = IsoMapView._caption
+    IsoMapView._caption = lambda self, p, back, text, warn: drawn.append((back, text))
+    try:
+        v.grab()
+    finally:
+        IsoMapView._caption = orig
+    texts = [t for _b, t in drawn]
+    room = [t for t in texts if "WebCan" in t]
+    assert len(room) == 1 and "Camera IP" in room[0] and "Sala1" in room[0] and "Cozinha" in texts and len(texts) == 2   # um rótulo para a sala, outro para a câmera sozinha
+    pj = v.projector()
+    floor_pts = [c for s in sc.sections[:2] for c in pj.polygon(s.floor, 0)]
+    back = next(b for b, t in drawn if "WebCan" in t)
+    assert tuple(back) == min(floor_pts, key=lambda c: c[1])                                    # preso ao canto mais ao fundo DO CHÃO (não do retângulo da câmera)
+
+
+def test_two_cameras_of_one_room_read_as_one_room_with_one_grid_one_measure_and_cameras_on_the_walls(qapp):
+    from PySide6.QtGui import QPainter
+    from atendeio.app import map_model as M
+    from atendeio.app.floor_calib import FloorCalib
+    from atendeio.app.ui.map_view import IsoMapView
+    cal = FloorCalib(((0.3, 0.4), (0.7, 0.4), (0.9, 0.9), (0.1, 0.9)), 4.0, 3.0)
+    cams = [{"id": 1, "name": "A", "room": "Salão"}, {"id": 2, "name": "B", "room": "Salão"}]
+    st = {"size": [640, 480], "online": True, "areas": [], "people": 0}
+    sc = M.build_scene(cams, {1: [], 2: []}, {1: st, 2: st}, {1: M.Layout(0, 0, 1.0), 2: M.Layout(0.4, 0.2, 1.0, 10.0)}, calibs={1: cal, 2: cal})
+    v = IsoMapView()
+    v.resize(900, 600)
+    v.set_scene(sc, refit=True)
+    groups = v._room_groups()
+    assert len(groups) == 1 and [s.camera_id for s in groups[0]] == [1, 2]            # as duas câmeras são UMA sala
+    texts = []
+    orig = QPainter.drawText
+    try:
+        QPainter.drawText = lambda self, *a: (texts.append(a[-1]) if isinstance(a[-1], str) else None, orig(self, *a))[1]
+        v.grab()
+    finally:
+        QPainter.drawText = orig
+    measures = [t for t in texts if " × " in t and t.endswith(" m")]
+    assert len(measures) == 1                                                          # UMA medida para a sala (não uma por câmera)
+    assert v.grab().toImage() is not None

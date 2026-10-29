@@ -4,6 +4,7 @@ Monta o mesmo `Container` do servidor (serviços, repositórios, hubs) e expõe 
 utilizador local, sem login por senha). Usuário e senha RTSP vivem só na memória (SessionCredentials)."""
 
 import threading
+import time
 from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from typing import Callable, Optional
@@ -13,7 +14,9 @@ from ..config import Settings
 from ..container import Container, build_container
 from ..errors import DomainError, RateLimitError, ValidationError
 from ..repositories.map import MapRepository
+from ..analytics.camera_geometry import CameraGeometry
 from ..services import rtsp
+from ..vision import view_signature as VS
 from ..services.zones import to_zone
 from .floor_calib import FloorCalib
 
@@ -52,6 +55,11 @@ class AppCore:
         self._lock = threading.Lock()
         self._stop_evt = threading.Event()
         self._reaper: Optional[threading.Thread] = None
+        self.c.registry.geometry_lookup = self._geometry_provider
+        self._view_win: dict = {}            # camera_id -> ViewWindow (quadros pequenos, só memória)
+        self._view_bad: dict = {}            # camera_id -> ciclos seguidos com a cena diferente
+        self._view_changed: dict = {}        # camera_id -> distância (cena mudou: remapear)
+        self._view_at = 0.0
 
     # -- ciclo de vida -----------------------------------------------------------------------
     def start(self) -> None:
@@ -74,6 +82,10 @@ class AppCore:
                 self.c.registry.reap_idle()
             except Exception as e:
                 print(f"[-] coletor de câmeras ociosas: {type(e).__name__}: {e}")
+            try:
+                self.watch_views()
+            except Exception as e:
+                print(f"[-] vigia da cena das câmeras: {type(e).__name__}: {e}")
 
     def stop(self) -> None:
         """Saída limpa: o monitor solta os hubs, cada hub entrega o histórico, o escritor grava e o cofre é esquecido."""
@@ -98,6 +110,14 @@ class AppCore:
 
     def camera(self, cam_id: int) -> dict:
         return self.c.cameras.get_owned(cam_id, self.user_id)
+
+    def set_camera_room(self, cam_id: int, room: Optional[str]) -> str:
+        """Define a sala da câmera (opcional). Devolve o texto já limpo."""
+        return self.c.cameras.set_room(cam_id, self.user_id, room)
+
+    def rooms(self) -> list:
+        """Salas já usadas (para sugerir ao editar)."""
+        return sorted({c["room"] for c in self.cameras() if c.get("room")}, key=str.lower)
 
     def presets(self) -> dict:
         return rtsp.PRESETS
@@ -176,7 +196,57 @@ class AppCore:
         saved = self.c.zones.replace(cam_id, self.user_id, zones)
         self._zone_cache.pop(cam_id, None)
         self.c.registry.set_zones(cam_id, [to_zone(r) for r in saved])
+        self.accept_view(cam_id)                      # áreas remapeadas: a cena de agora é a nova referência
         return saved
+
+    # -- a cena mudou? (câmera ou mobília movida: é preciso remapear) ---------------------------------------------------------
+    VIEW_EVERY_S = 20.0           # um quadro pequeno a cada tanto; a mediana de 5 dá a assinatura
+    VIEW_CONFIRM = 2              # ciclos seguidos com a cena diferente antes de avisar (evita alarme por uma mudança passageira)
+
+    def watch_views(self, force: bool = False) -> None:
+        """Compara a assinatura estável da cena de cada câmera lida com a guardada (64 bytes, sem imagem). Sem assinatura guardada, a
+        primeira vira a referência. Se a cena mudar de forma sustentada, a câmera entra em `view_changed_ids()`."""
+        now = time.monotonic()
+        if not force and now - self._view_at < self.VIEW_EVERY_S:
+            return
+        self._view_at = now
+        for hub in self.c.registry.hubs():
+            if hub.owner_id != self.user_id or not hub.online:
+                continue
+            frame = hub.last_frame()
+            if frame is None:
+                continue
+            cid = hub.cam_id
+            win = self._view_win.setdefault(cid, VS.ViewWindow())
+            win.add(frame)
+            sig = win.signature()
+            if sig is None:
+                continue
+            saved = self.c.cameras._cameras.get_view_sig(cid)
+            if saved is None:
+                self.c.cameras._cameras.set_view_sig(cid, sig)            # primeira vez: é a referência
+                continue
+            d = VS.distance(saved, sig)
+            if d >= VS.CHANGED_AT:
+                self._view_bad[cid] = self._view_bad.get(cid, 0) + 1
+                if self._view_bad[cid] >= self.VIEW_CONFIRM:
+                    self._view_changed[cid] = d
+            else:
+                self._view_bad.pop(cid, None)
+                self._view_changed.pop(cid, None)
+
+    def view_changed_ids(self) -> dict:
+        """{camera_id: distância} das câmeras cuja cena mudou desde a última vez que as áreas/chão foram confirmados."""
+        return dict(self._view_changed)
+
+    def accept_view(self, cam_id: int) -> None:
+        """A cena atual passa a ser a referência (o utilizador remapeou ou disse que está tudo certo)."""
+        self.c.cameras.get_owned(cam_id, self.user_id)
+        win = self._view_win.get(cam_id)
+        sig = win.signature() if win is not None else None
+        self.c.cameras._cameras.set_view_sig(cam_id, sig)                 # sem janela pronta: None, e a próxima vira a referência
+        self._view_bad.pop(cam_id, None)
+        self._view_changed.pop(cam_id, None)
 
     def mark_clean(self, cam_id: int, zone_id: int) -> None:
         self.c.zones.ensure_exists(cam_id, zone_id, self.user_id)
@@ -263,7 +333,8 @@ class AppCore:
         """Tudo que o mapa precisa num instante, SÓ das câmeras pedidas (None = todas): câmeras, áreas (em cache), estados e
         as que bateram no limite."""
         wanted = None if camera_ids is None else set(camera_ids)
-        cams = [c for c in self.c.cameras.list(self.user_id) if wanted is None or c["id"] in wanted]
+        changed = self._view_changed
+        cams = [{**c, "view_changed": c["id"] in changed} for c in self.c.cameras.list(self.user_id) if wanted is None or c["id"] in wanted]
         zones = {}
         for cam in cams:
             if cam["id"] not in self._zone_cache:
@@ -272,6 +343,17 @@ class AppCore:
         live = self.c.registry.states_for(self.user_id)
         return {"cameras": cams, "zones": zones, "states": {c["id"]: live.get(c["id"]) for c in cams},
                 "limited": sorted(c for c in self._map_limited if wanted is None or c in wanted)}
+
+    def map_frames(self, camera_ids) -> dict:
+        """{camera_id: quadro BGR atual} das câmeras pedidas que estão sendo lidas (para montar o piso do Mapa; só memória)."""
+        out = {}
+        for cid in camera_ids:
+            hub = self.c.registry.get(cid)
+            if hub is not None and hub.owner_id == self.user_id:
+                f = hub.last_frame()
+                if f is not None:
+                    out[cid] = f
+        return out
 
     def map_layouts(self) -> dict:
         """{camera_id: (x, y, scale, rot°)} salvos (o que faltar vem do layout automático)."""
@@ -283,6 +365,16 @@ class AppCore:
             if not isinstance(v, (int, float)) or v != v or abs(v) > 1e6:
                 raise ValidationError("Posição inválida no mapa.")
         self._map_repo.upsert(cam_id, float(x), float(y), max(0.4, min(3.0, float(scale))), float(rot) % 360.0)
+
+    @staticmethod
+    def _provider_of(calib: FloorCalib):
+        """aspecto da imagem -> geometria da câmera (posição e inclinação recuperadas do chão calibrado)."""
+        return lambda aspect: CameraGeometry.from_calibration(calib._h(), calib.width, calib.depth, aspect)
+
+    def _geometry_provider(self, cam_id: int):
+        """Para o registro: a geometria do chão calibrado da câmera (ou None = regra por imagem)."""
+        calib = self.map_calibrations().get(cam_id)
+        return self._provider_of(calib) if calib is not None else None
 
     def map_calibrations(self) -> dict:
         """{camera_id: FloorCalib} das câmeras que têm o chão calibrado."""
@@ -301,10 +393,13 @@ class AppCore:
         except (ValueError, TypeError) as e:
             raise ValidationError(str(e) or "Calibração inválida.")
         self._map_repo.set_calibration(cam_id, calib.to_dict())
+        self.c.registry.set_geometry(cam_id, self._provider_of(calib))      # as mesas desta câmera já passam a ser decididas em metros
+        self.accept_view(cam_id)
 
     def clear_map_calibration(self, cam_id: int) -> None:
         self.c.cameras.get_owned(cam_id, self.user_id)
         self._map_repo.clear_calibration(cam_id)
+        self.c.registry.set_geometry(cam_id, None)
 
     def reset_map_layout(self) -> None:
         self._map_repo.clear_for_user(self.user_id)

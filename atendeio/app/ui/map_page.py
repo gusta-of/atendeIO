@@ -6,6 +6,7 @@ import math
 import time
 from typing import Dict, Optional
 
+import cv2
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (QBoxLayout, QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QSlider,
                                QSpinBox, QVBoxLayout, QWidget)
@@ -17,15 +18,16 @@ from ..charts import models as CM
 from .. import prefs
 from ..core import AppCore
 from ..format import hh
-from ..people_model import PersonScale
+from ..floor_texture import FloorMedian, warp_floor
+from ..room_merge import RoomMerger
+from ..room_align import AlignError, fit_from_textures, fit_rigid, layout_for
 from .charts import ColumnChart
 from .floor_calib_dialog import FloorCalibDialog
 from .hall_panel import ScrollList
 from .map_view import ALERT_COLOR, SECTION_STATUS_TEXT, IsoMapView
 
 SIDE_BY_SIDE_FROM = 980
-SIDE_W = 380
-SIDE_MIN_W = 300
+SIDE_W = 340            # largura FIXA do painel lateral (o texto quebra linha; nada o faz crescer)
 ANGLE_MIN, ANGLE_MAX, ANGLE_DEFAULT = 22, 86, 52          # graus: slider da angulação da vista
 NO_SELECTION_TEXT = "Selecione uma ou mais câmeras na lista ao lado\npara vê-las no mapa."
 STACKED_SIDE_H = 360
@@ -107,7 +109,10 @@ class MapPage(QWidget):
         self.rules = load_rules()
         self.layouts: Dict[int, M.Layout] = {}
         self.calibs: dict = {}
-        self.person_scale = PersonScale()
+        self._align: Optional[dict] = None
+        self.merger = RoomMerger()
+        self._floor: Dict[int, FloorMedian] = {}      # piso simulado pelas imagens (só memória): mediana dos quadros por câmera
+        self._floor_at = 0.0
         self.aspects: Dict[int, float] = {}
         self.snap: Optional[dict] = None
         self.scene: Optional[M.Scene] = None
@@ -211,9 +216,9 @@ class MapPage(QWidget):
         side.setObjectName("panel")
         lay = QVBoxLayout(side)
         # totais (tamanho fixo: só o texto muda)
-        self.t_people = _label("", wrap=False)
-        self.t_tables = _label("", wrap=False)
-        self.t_alerts = _label("", wrap=False)
+        self.t_people = _label("")
+        self.t_tables = _label("")
+        self.t_alerts = _label("")
         for w in (self.t_people, self.t_tables, self.t_alerts):
             w.setTextFormat(Qt.TextFormat.RichText)
             lay.addWidget(w)
@@ -247,15 +252,23 @@ class MapPage(QWidget):
         self.b_rot_r = self._btn("⟳ 15°", lambda: self._rotate_selected(15), "Gira esta zona 15° para a direita")
         btns2.addWidget(self.b_rot_l)
         btns2.addWidget(self.b_rot_r)
+        self.b_align = self._btn("Alinhar sala", self._align_start,
+                                 "Alinha esta câmera com outra da mesma sala usando uma pessoa que anda (precisa de sala e chão calibrado nas duas)")
         btns2.addWidget(self.b_calib)
+        btns2.addWidget(self.b_align)
         btns2.addStretch()
         for w in (self.d_title, self.d_info, self.d_chart_title, self.d_chart, self.d_empty):
             dl.addWidget(w)
         dl.addLayout(btns)
         dl.addLayout(btns2)
-        self.detail.setFixedHeight(285)
+        self.align_msg = _label("", muted=True)
+        dl.addWidget(self.align_msg)
+        self.detail.setFixedHeight(320)
         lay.addWidget(self.detail)
         self._set_detail_visibility(False)
+        for lb in side.findChildren(QLabel):
+            lb.setWordWrap(True)
+            lb.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)   # o tamanho do texto não alarga o painel
         return side
 
     def _build_legend(self) -> QVBoxLayout:
@@ -284,9 +297,7 @@ class MapPage(QWidget):
             self._side_by_side = wide
             self.body.setDirection(QBoxLayout.Direction.LeftToRight if wide else QBoxLayout.Direction.TopToBottom)
         if wide:
-            # flexível (não fixo): um painel de largura fixa soma ao mínimo da janela e impediria de encolhê-la até o arranjo estreito
-            self.side.setMinimumWidth(SIDE_MIN_W)
-            self.side.setMaximumWidth(SIDE_W)
+            self.side.setFixedWidth(SIDE_W)
             self.side.setMinimumHeight(0)
             self.side.setMaximumHeight(16777215)
         else:
@@ -347,6 +358,23 @@ class MapPage(QWidget):
     def _save_view(self) -> None:
         prefs.settings().setValue("map/view", json.dumps(self.view.view_state()))
 
+    # -- imagens do piso, só para ALINHAR câmeras da mesma sala (nunca desenhadas, nunca gravadas) -----------------------------------
+    FLOOR_EVERY_S, FLOOR_FAST_S = 20.0, 2.0
+
+    def _floor_update(self, snap: dict) -> None:
+        """Colhe um quadro das câmeras calibradas que têm sala (para o alinhamento por imagem): a cada 2 s até ter 3 amostras, depois a
+        cada 20 s. A mediana apaga quem passou. Fica só na memória; não aparece no mapa."""
+        now = time.monotonic()
+        cams = [c for c in snap["cameras"] if (c.get("room") or "").strip() and c["id"] in self.calibs
+                and (snap["states"].get(c["id"]) or {}).get("size")]
+        ready = all(self._floor.get(c["id"]) and self._floor[c["id"]].samples >= 3 for c in cams)
+        if not cams or now - self._floor_at < (self.FLOOR_EVERY_S if ready else self.FLOOR_FAST_S):
+            return
+        self._floor_at = now
+        for cid, frame in self.core.map_frames([c["id"] for c in cams]).items():
+            size = snap["states"][cid]["size"]
+            self._floor.setdefault(cid, FloorMedian()).add(warp_floor(frame, self.calibs[cid], size[0] / size[1]))
+
     def _people_opts(self) -> None:
         st = prefs.settings()
         st.setValue("map/people", self.people_btn.isChecked())
@@ -356,6 +384,8 @@ class MapPage(QWidget):
     # -- dados ------------------------------------------------------------------------------------------------------------
     def tick(self) -> None:
         self.snap = self.core.map_snapshot(self.camera_ids)
+        self._collect_align(self.snap)                       # um instante por leitura (não por redesenho)
+        self._floor_update(self.snap)
         self._rebuild(refit=False)
         self._maybe_refresh_profile()
 
@@ -363,13 +393,8 @@ class MapPage(QWidget):
         if not self.snap:
             return
         s = self.snap
-        for cid, st in s["states"].items():                 # escala aprendida: quanto mede uma pessoa de pé em cada linha da imagem
-            for t in ((st or {}).get("tracks") or []):
-                if t.get("full"):
-                    self.person_scale.add(cid, t["y"], t["h"])
-        lifts = {cid: (lambda y, cid=cid: self.person_scale.table_lift(cid, y)) for cid in s["states"]}
         self.scene = M.build_scene(s["cameras"], s["zones"], s["states"], self.layouts, self.aspects, self.rules, s["limited"],
-                                   self.calibs, lifts)
+                                   self.calibs, self.merger, time.monotonic())
         for sec in self.scene.sections:
             h = sec.rect[3] - sec.rect[1]
             if h:
@@ -382,7 +407,9 @@ class MapPage(QWidget):
     def _refresh_side(self) -> None:
         sc = self.scene
         t = sc.totals
-        self.t_people.setText(f'<b style="font-size:22px">{t["people"]}</b> pessoa(s) em {t["cameras_ok"]}/{t["cameras"]} câmera(s) ao vivo')
+        self.t_people.setText(f'<b style="font-size:22px">{t["people"]}</b> pessoa(s) em {t["cameras_ok"]}/{t["cameras"]} câmera(s) ao vivo'
+                              + (f' <span style="color:#94a3b8">· {t["duplicates"]} vista(s) por mais de uma câmera, contada(s) uma vez</span>'
+                                 if t.get("duplicates") else ""))
         tb = t["tables"]
         self.t_tables.setText(f'<span style="color:#34d399"><b>{tb["livre"]}</b> livres</span> &nbsp; '
                               f'<span style="color:#f87171"><b>{tb["ocupada"]}</b> ocupadas</span> &nbsp; '
@@ -442,7 +469,7 @@ class MapPage(QWidget):
         self._maybe_refresh_profile()
 
     def _set_detail_visibility(self, has: bool) -> None:
-        for w in (self.d_info, self.d_chart_title, self.d_chart, self.b_open, self.b_bigger, self.b_smaller, self.b_calib, self.b_rot_l, self.b_rot_r):
+        for w in (self.d_info, self.d_chart_title, self.d_chart, self.b_open, self.b_bigger, self.b_smaller, self.b_calib, self.b_align, self.b_rot_l, self.b_rot_r):
             w.setVisible(has)
         self.d_empty.setVisible(False)
 
@@ -503,6 +530,88 @@ class MapPage(QWidget):
                  for h in hours[lo:hi + 1]]
         self.d_chart.set_model(CM.column_model(items, lambda d: d["label"], lambda d, i, n: d["x"], height=150))
 
+    # -- alinhar câmeras da mesma sala usando uma pessoa que anda ------------------------------------------------------------
+    ALIGN_SECONDS, ALIGN_PAIRS = 15.0, 60
+
+    def _room_peer(self, cam_id: int) -> Optional[int]:
+        """Outra câmera da mesma sala (menor id) com o chão calibrado, para servir de referência."""
+        cams = {c["id"]: c for c in (self.snap or {}).get("cameras", [])}
+        me = cams.get(cam_id)
+        if not me or not (me.get("room") or "").strip() or cam_id not in self.calibs:
+            return None
+        room = me["room"].strip().lower()
+        peers = sorted(i for i, c in cams.items() if i != cam_id and (c.get("room") or "").strip().lower() == room and i in self.calibs)
+        return peers[0] if peers else None
+
+    def _align_start(self) -> None:
+        cid = self.sel[0]
+        peer = self._room_peer(cid) if cid else None
+        if peer is None:
+            self.align_msg.setText("Para alinhar: dê a mesma Sala às duas câmeras (Editar) e calibre o chão de cada uma.")
+            return
+        # 1º: pelas imagens do piso (funciona com a sala cheia). 2º, se não der: uma pessoa andando.
+        why = self._align_by_floor(peer, cid)
+        if why is None:
+            return
+        self._align = {"b": cid, "a": peer, "pairs": [], "until": time.monotonic() + self.ALIGN_SECONDS}
+        self.align_msg.setText(f"{why} Tentando com uma pessoa andando: fique sozinho(a) na sala, visível nas duas câmeras, e ande devagar.")
+
+    def _align_by_floor(self, a: int, b: int) -> Optional[str]:
+        """Alinha B a A casando as imagens do piso das duas. Devolve None se alinhou, ou o motivo de não ter dado."""
+        snap = self.snap or {}
+        try:
+            ma, mb = self._floor.get(a), self._floor.get(b)
+            if not (ma and mb and ma.samples >= 3 and mb.samples >= 3):
+                return "O piso ainda está sendo montado pelas câmeras (espere alguns segundos com o botão Piso ligado)."
+            sizes = {cid: (snap["states"][cid] or {}).get("size") for cid in (a, b)}
+            if not all(sizes.values()):
+                return "Faltam dados das câmeras."
+            asp = {cid: sizes[cid][0] / sizes[cid][1] for cid in (a, b)}
+            ka, kb = self.calibs[a].units_per_m(asp[a]), self.calibs[b].units_per_m(asp[b])
+            theta, tx, ty, err = fit_from_textures(mb.image(), asp[b], kb, ma.image(), asp[a], ka)
+            self._align_apply(a, b, asp, theta, tx, ty, err)
+            return None
+        except (AlignError, KeyError, TypeError, cv2.error) as e:
+            return str(e) if isinstance(e, AlignError) else "Não consegui alinhar pelas imagens."
+
+    def _align_apply(self, a: int, b: int, asp: dict, theta: float, tx: float, ty: float, rms: float) -> None:
+        new = layout_for(self._layout_of(a), asp[a], self.calibs[a].units_per_m(asp[a]), asp[b],
+                         self.calibs[b].units_per_m(asp[b]), theta, tx, ty)
+        self.layouts[b] = new
+        self.core.set_map_layout(b, new.x, new.y, new.scale, new.rot)
+        self.merger.max_m = max(0.5, min(1.5, 1.5 * rms))               # o erro do alinhamento define até onde "é a mesma pessoa"
+        self.align_msg.setText(f"Alinhado (erro médio {rms * 100:.0f} cm). As duas câmeras agora mostram o mesmo chão; "
+                               f"duas detecções a menos de {self.merger.max_m:.1f} m contam como uma pessoa.")
+        self._rebuild()
+
+    def _collect_align(self, snap: dict) -> None:
+        al = self._align
+        if al is None:
+            return
+        pts = {}
+        for key in ("a", "b"):
+            st = snap["states"].get(al[key]) or {}
+            tr = st.get("tracks") or []
+            calib = self.calibs.get(al[key])
+            if len(tr) != 1 or calib is None or not st.get("size"):
+                break
+            pts[key] = calib.to_plan_m(tr[0]["x"], tr[0]["y"], st["size"][0] / st["size"][1])
+        if len(pts) == 2 and None not in pts.values():
+            al["pairs"].append((pts["b"], pts["a"]))
+        self.align_msg.setText(f"Alinhando… {len(al['pairs'])} instantes com a pessoa nas duas câmeras. Ande pela sala.")
+        if time.monotonic() >= al["until"] or len(al["pairs"]) >= self.ALIGN_PAIRS:
+            self._align_finish(snap)
+
+    def _align_finish(self, snap: dict) -> None:
+        al, self._align = self._align, None
+        try:
+            a, b = al["a"], al["b"]
+            theta, tx, ty, rms = fit_rigid(al["pairs"])
+            asp = {cid: (snap["states"][cid]["size"][0] / snap["states"][cid]["size"][1]) for cid in (a, b)}
+            self._align_apply(a, b, asp, theta, tx, ty, rms)
+        except (AlignError, KeyError, ZeroDivisionError, DomainError) as e:
+            self.align_msg.setText(str(e) if isinstance(e, (AlignError, DomainError)) else "Não consegui alinhar: faltam dados das câmeras.")
+
     def _calibrate_selected(self) -> None:
         cid = self.sel[0]
         cam = next((c for c in (self.snap or {}).get("cameras", []) if c["id"] == cid), None)
@@ -510,6 +619,9 @@ class MapPage(QWidget):
             return
         if FloorCalibDialog(self.core, cam, self.calibs.get(cid), self).exec():
             self.calibs = self.core.map_calibrations()
+            if cid in self._floor:                                     # chão recalibrado: as imagens antigas não valem mais
+                self._floor[cid].clear()
+                self._floor_at = 0.0
             self._rebuild()
 
     def _open_selected_camera(self) -> None:

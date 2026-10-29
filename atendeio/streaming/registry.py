@@ -16,6 +16,7 @@ class HubRegistry:
                  fps_lookup: Optional[Callable[[int], tuple]] = None):
         """`fps_lookup(cam_id) -> (fps_view, fps_monitor)`: o FPS salvo por câmera (None = padrão do sistema)."""
         self._cfg, self._detector, self._flow_sink, self._fps_lookup = settings, detector, flow_sink, fps_lookup
+        self.geometry_lookup: Optional[Callable[[int], object]] = None   # cam_id -> provider(aspecto)->CameraGeometry (chão calibrado) | None
         self._hubs: dict = {}  # cam_id -> CameraHub
         self._zombies: list = []
         self._lock = threading.Lock()
@@ -28,6 +29,11 @@ class HubRegistry:
                 hub.set_fps(*self._fps_lookup(cam_id))
             except Exception as e:      # configuração ilegível não impede a câmera de ligar: usa o padrão
                 print(f"[-] câmera {cam_id}: FPS salvo ignorado ({type(e).__name__})")
+        if self.geometry_lookup is not None:
+            try:
+                hub.set_geometry(self.geometry_lookup(cam_id))
+            except Exception as e:
+                print(f"[-] câmera {cam_id}: chão calibrado ignorado ({type(e).__name__})")
         self._hubs[cam_id] = hub
         hub.start()
         return hub
@@ -122,6 +128,16 @@ class HubRegistry:
     def count(self) -> int:
         with self._lock:
             return len(self._hubs)
+
+    def set_geometry(self, cam_id: int, provider) -> None:
+        """Aplica (ou tira, com None) a geometria do chão calibrado ao hub vivo da câmera."""
+        hub = self.get(cam_id)
+        if hub is not None:
+            hub.set_geometry(provider)
+
+    def hubs(self) -> list:
+        with self._lock:
+            return list(self._hubs.values())
 
     def get(self, cam_id: int) -> Optional[CameraHub]:
         with self._lock:

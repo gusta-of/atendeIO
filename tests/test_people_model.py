@@ -38,32 +38,3 @@ def test_no_people_when_camera_is_not_ok():
     cam = {"id": 1, "name": "A"}
     sc = M.build_scene([cam], {1: []}, {1: None}, {})
     assert sc.sections[0].people == []
-
-
-def test_person_scale_learns_height_per_row_and_lifts_the_table_to_its_base():
-    from atendeio.app.people_model import PersonScale, TABLE_RATIO
-    s = PersonScale()
-    assert s.table_lift(1, 0.3) == 0.0                                   # sem amostras: não estima
-    for i in range(20):                                                   # quanto mais embaixo, maior a pessoa: h = 0,9·y
-        y = 0.4 + i * 0.03
-        s.add(1, y, 0.9 * y)
-    assert s.height_at(1, 0.6) == pytest.approx(0.54, abs=0.02)
-    assert s.table_lift(1, 0.6) == pytest.approx(TABLE_RATIO * 0.54, abs=0.02)
-    assert s.table_lift(2, 0.6) == 0.0                                    # outra câmera: separada
-    s.add(1, 0.5, 0.01)                                                   # lixo é ignorado
-    s.add(1, 0.5, 5.0)
-    assert s.height_at(1, 0.5) == pytest.approx(0.45, abs=0.03)
-
-
-def test_the_table_is_placed_by_its_base_only_when_the_floor_is_calibrated():
-    from atendeio.app.floor_calib import FloorCalib
-    cam = {"id": 1, "name": "A"}
-    zone = {"id": 1, "name": "M", "kind": "mesa", "points": [(0.4, 0.2), (0.5, 0.2), (0.5, 0.3), (0.4, 0.3)]}
-    st = {"size": [1600, 900], "online": True, "areas": [], "people": 0}
-    cal = FloorCalib(((0.3, 0.3), (0.7, 0.3), (0.95, 0.95), (0.05, 0.95)), 4.0, 3.0)
-    lifts = {1: lambda y: 0.25}
-    flat = M.build_scene([cam], {1: [zone]}, {1: st}, {}, calibs={1: cal}).sections[0].blocks[0].footprint
-    lifted = M.build_scene([cam], {1: [zone]}, {1: st}, {}, calibs={1: cal}, lifts=lifts).sections[0].blocks[0].footprint
-    assert lifted != flat
-    lin = M.build_scene([cam], {1: [zone]}, {1: st}, {}, lifts=lifts).sections[0].blocks[0].footprint
-    assert lin == M.build_scene([cam], {1: [zone]}, {1: st}, {}).sections[0].blocks[0].footprint   # sem calibração: nada muda

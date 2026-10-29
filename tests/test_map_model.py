@@ -233,3 +233,73 @@ def test_clicking_a_rotated_zone_hits_the_turned_shape_not_the_old_rectangle():
     outside_turned = pj.project(1.8, 0.5, 0.0)     # só existia antes de girar (a zona ficou estreita)
     assert M.pick(sc, pj, *inside_turned) == ("section", 1)
     assert M.pick(sc, pj, *outside_turned) is None
+
+
+def test_a_camera_whose_view_changed_raises_a_remap_alert_on_the_map():
+    cams = [{"id": 1, "name": "IP", "kind": "local", "ref": "x", "view_changed": True}, {"id": 2, "name": "Web", "kind": "local", "ref": "y"}]
+    st = {"size": [640, 480], "online": True, "areas": [], "people": 0}
+    sc = M.build_scene(cams, {1: [], 2: []}, {1: st, 2: st}, {})
+    kinds = [(a.kind, a.camera_id) for a in sc.alerts]
+    assert ("view", 1) in kinds and ("view", 2) not in kinds
+    assert "remapear" in [a for a in sc.alerts if a.kind == "view"][0].text
+
+
+def _synthetic_camera(f, pos, look, aspect=16 / 9):
+    import numpy as np
+    cam = np.array(pos, float)
+    z = np.array(look, float) - cam
+    z /= np.linalg.norm(z)
+    x = np.cross(z, [0, 0, 1.0])
+    x /= np.linalg.norm(x)
+    rot = np.vstack([x, np.cross(z, x), z])
+    t = -rot @ cam
+
+    def project(P):
+        pc = rot @ np.array(P, float) + t
+        return (f * pc[0] / pc[2] / aspect + 0.5, f * pc[1] / pc[2] + 0.5)
+    return project
+
+
+def test_the_map_places_the_camera_icon_at_its_real_position_and_height_and_shows_what_it_sees():
+    from atendeio.app.floor_calib import FloorCalib
+    project = _synthetic_camera(1.1, (2.5, 9.0, 2.6), (2.5, 2.0, 0.0))             # câmera 2,6 m de altura, a 9 m do fundo, olhando a sala 5×4 m
+    corners = [(0.0, 0.0), (5.0, 0.0), (5.0, 4.0), (0.0, 4.0)]
+    cal = FloorCalib(tuple(project((X, Y, 0.0)) for X, Y in corners), 5.0, 4.0)
+    cam = {"id": 1, "name": "IP"}
+    st = {"size": [1600, 900], "online": True, "areas": [], "people": 0}
+    sec = M.build_scene([cam], {1: []}, {1: st}, {1: M.Layout(0.0, 0.0, 1.0, 0.0)}, calibs={1: cal}).sections[0]
+    assert sec.camera is not None and len(sec.fov) == 3
+    cx, cy, cz = sec.camera
+    upm = cal.units_per_m(1600 / 900)
+    assert cz == pytest.approx(2.6 * upm, rel=0.05)                                   # altura recuperada (m) × unidades por metro
+    fx = [p[0] for p in sec.floor]
+    fy = [p[1] for p in sec.floor]
+    # no plano do app a câmera fica do lado da FRENTE do chão (Y cresce para a câmera), centrada em X, a ~7 m dela (9 − 2)
+    assert min(fx) < cx < max(fx)
+    dist_front = math.hypot(cx - sum(fx) / 4, cy - sum(fy) / 4) / upm
+    assert 7.0 < dist_front < 10.5                                                    # centro do chão (4,5 m da frente) + 7 m
+    no_cal = M.build_scene([cam], {1: []}, {1: st}, {}).sections[0]
+    assert no_cal.camera is None and no_cal.fov == []                                 # sem calibração não há onde pôr o ícone
+
+
+def test_tables_and_people_use_the_same_camera_geometry_so_a_person_beside_a_table_is_near_it_on_the_map():
+    from atendeio.app.floor_calib import FloorCalib
+    project = _synthetic_camera(1.1, (2.5, 9.0, 2.6), (2.5, 2.0, 0.0))
+    corners = [(0.0, 0.0), (5.0, 0.0), (5.0, 4.0), (0.0, 4.0)]
+    cal = FloorCalib(tuple(project((X, Y, 0.0)) for X, Y in corners), 5.0, 4.0)
+    table = [(3.0, 1.0), (4.2, 1.0), (4.2, 1.8), (3.0, 1.8)]                            # no chão, tampo a 0,75 m
+    zone = {"id": 1, "name": "M", "kind": "mesa", "points": [project((X, Y, 0.75))[:2] for X, Y in table]}
+    px, py = 4.2 + 0.35, 1.4                                                            # pessoa em pé encostada na mesa
+    foot, head = project((px, py, 0.0)), project((px, py, 1.7))
+    st = {"size": [1600, 900], "online": True, "areas": [], "people": 1,
+          "tracks": [{"id": 1, "x": foot[0], "y": foot[1], "h": foot[1] - head[1], "full": True}]}
+    cam = {"id": 1, "name": "IP"}
+    sec = M.build_scene([cam], {1: [zone]}, {1: st}, {1: M.Layout(0.0, 0.0, 1.0, 0.0)}, calibs={1: cal}).sections[0]
+    upm = cal.units_per_m(1600 / 900)
+    fp = sec.blocks[0].footprint
+    cxm = sum(q[0] for q in fp) / 4
+    cym = sum(q[1] for q in fp) / 4
+    _pid, wx, wy = sec.people[0]
+    assert math.hypot(wx - cxm, wy - cym) / upm < 1.6                                   # centro da mesa a ~0,35 + meia mesa de largura
+    w = math.hypot(fp[1][0] - fp[0][0], fp[1][1] - fp[0][1]) / upm
+    assert w == pytest.approx(1.2, abs=0.2)                                             # a mesa no mapa tem o tamanho real (1,2 m)

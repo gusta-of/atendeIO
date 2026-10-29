@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS cameras (
     classes TEXT NOT NULL DEFAULT '[]',      -- JSON com os ids das classes habilitadas (vazio = nenhuma)
     fps_view REAL,                           -- FPS com o vídeo aberto; NULL = padrão do sistema (ATENDEIO_MAX_FPS)
     fps_monitor REAL,                        -- FPS só monitorando (sem ninguém olhando); NULL = padrão (ATENDEIO_MONITOR_FPS)
+    view_sig BLOB,                           -- assinatura de 64 bytes da cena (NÃO é imagem): detecta câmera/mobília movida
+    room TEXT NOT NULL DEFAULT '',           -- sala (opcional): câmeras com a mesma sala veem o mesmo chão; o Mapa conta cada pessoa uma vez
     created REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS zones (
@@ -112,6 +114,10 @@ class Database:
             conn.execute("ALTER TABLE cameras ADD COLUMN classes TEXT NOT NULL DEFAULT '[]'")
         if "rot" not in {r["name"] for r in conn.execute("PRAGMA table_info(map_layout)")}:
             conn.execute("ALTER TABLE map_layout ADD COLUMN rot REAL NOT NULL DEFAULT 0")
+        if "view_sig" not in cam_cols:
+            conn.execute("ALTER TABLE cameras ADD COLUMN view_sig BLOB")
+        if "room" not in cam_cols:
+            conn.execute("ALTER TABLE cameras ADD COLUMN room TEXT NOT NULL DEFAULT ''")
         for col in ("fps_view", "fps_monitor"):
             if col not in cam_cols:
                 conn.execute(f"ALTER TABLE cameras ADD COLUMN {col} REAL")

@@ -9,7 +9,8 @@ import time
 from typing import List, Optional, Tuple
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QCursor, QFont, QFontMetrics, QPainter, QPainterPath, QPen, QPolygonF
+from PySide6.QtGui import (QBrush, QColor, QCursor, QFont, QFontMetrics, QLinearGradient, QPainter, QPainterPath, QPen,
+                           QPolygonF)
 from PySide6.QtWidgets import QSizePolicy, QToolTip, QWidget
 
 from .. import iso, labels
@@ -35,6 +36,10 @@ def _shade(c: QColor, f: float, alpha: Optional[int] = None) -> QColor:
     return out
 
 
+CROWD_FROM = 25                   # a partir de tantas pessoas o mapa troca bonecos+rastros por pontos (sala cheia: legível e leve)
+SLAB = 0.04                       # espessura da placa do chão da sala
+WALL_H = 0.30                     # altura das paredes baixas do fundo (m)
+ROOM_FLOOR = "#1c2740"
 PERSON_H = 0.16                   # altura do boneco no mundo (a mesa tem 0,12)
 _CAM_COLORS = ["#38bdf8", "#f472b6", "#a3e635", "#fb923c", "#c084fc", "#2dd4bf"]
 
@@ -65,6 +70,7 @@ class IsoMapView(QWidget):
         self.show_people, self.show_trails = True, True
         self._people = PeopleSmoother()
         self._markers: list = []
+        self._merged: dict = {}                  # marcador -> em quantas câmeras ele aparece
         self._people_timer = QTimer(self)        # ~20 quadros/s só enquanto há gente para animar
         self._people_timer.setInterval(50)
         self._people_timer.timeout.connect(self._step_people)
@@ -81,7 +87,11 @@ class IsoMapView(QWidget):
         if refit or self._need_fit:
             self.fit_to_screen(force=refit)
         now = time.monotonic()
-        self._people.update(((sec.camera_id, pid, x, y) for sec in scene.sections for pid, x, y in sec.people), now)
+        self._people.update(((p.camera_id, p.pid, p.x, p.y) for p in scene.crowd), now)
+        self._merged = {p.key: len(p.members) for p in scene.crowd}
+        for p in scene.crowd:
+            for m in p.members[1:]:                  # as outras câmeras viram a MESMA pessoa: o marcador delas some já
+                self._people.drop(m)
         self._step_people()
         has_alerts = bool(scene.alerts)
         if has_alerts and not self._blink_timer.isActive():
@@ -191,15 +201,205 @@ class IsoMapView(QWidget):
             self._people_timer.stop()
             self.update()
 
+    # -- a sala -----------------------------------------------------------------------------------------------------------------
+    def _room_groups(self) -> list:
+        """Câmeras da MESMA sala (com o chão calibrado) formam um grupo; cada câmera sem sala é um grupo próprio."""
+        groups: dict = {}
+        for s in self.scene.sections:
+            if len(s.floor) == 4:
+                key = (s.room or "").strip().lower() or f"#{s.camera_id}"
+                groups.setdefault(key, []).append(s)
+        return list(groups.values())
+
+    @staticmethod
+    def _union_path(pj: iso.Projector, group: list) -> QPainterPath:
+        union = QPainterPath()
+        for s in group:
+            path = QPainterPath()
+            path.addPolygon(QPolygonF([QPointF(*q) for q in pj.polygon(s.floor, 0)]))
+            path.closeSubpath()
+            union = union.united(path)
+        return union
+
+    @staticmethod
+    def _outline(path: QPainterPath) -> list:
+        """O contorno (pontos em tela) do maior polígono do caminho."""
+        polys = path.toFillPolygons()
+        if not polys:
+            return []
+        big = max(polys, key=lambda q: q.boundingRect().width() * q.boundingRect().height())
+        pts = [big.at(i) for i in range(big.count())]
+        return pts[:-1] if len(pts) > 1 and pts[0] == pts[-1] else pts
+
+    def _rooms(self, p: QPainter, pj: iso.Projector) -> None:
+        """Cada sala é UMA peça: placa única (união dos chãos das câmeras), uma grade de 1 m comum, paredes baixas ao fundo, uma borda e uma
+        medida. Ninguém desenha o retângulo, a grade ou a medida por câmera: com duas câmeras na mesma sala o mapa lê como uma sala só."""
+        for group in self._room_groups():
+            union = self._union_path(pj, group)
+            ref = group[0]
+            upm = ref.units_per_m or 1.0
+            drop = abs(pj.project(0, 0, -SLAB)[1] - pj.project(0, 0, 0)[1])
+            pts = self._outline(union)
+            # espessura: a mesma placa deslocada para baixo, mais escura
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(_shade(QColor(ROOM_FLOOR), 0.55))
+            p.drawPath(union.translated(0, drop))
+            # paredes baixas nas bordas do FUNDO (as que viram as costas para quem olha)
+            if len(pts) >= 3:
+                wall = abs(pj.project(0, 0, WALL_H * upm)[1] - pj.project(0, 0, 0)[1])
+                orient = sum(pts[i].x() * pts[(i + 1) % len(pts)].y() - pts[(i + 1) % len(pts)].x() * pts[i].y() for i in range(len(pts)))
+                for i, a in enumerate(pts):
+                    b = pts[(i + 1) % len(pts)]
+                    dx, dy = b.x() - a.x(), b.y() - a.y()
+                    ny = -dx if orient > 0 else dx                     # componente vertical da normal de fora
+                    n = math.hypot(dx, dy)
+                    if n < 1 or ny / n > -0.2:                         # só as que olham para cima na tela = fundo
+                        continue
+                    quad = QPolygonF([a, b, QPointF(b.x(), b.y() - wall), QPointF(a.x(), a.y() - wall)])
+                    grad = QLinearGradient(QPointF(a.x(), a.y()), QPointF(a.x(), a.y() - wall))
+                    grad.setColorAt(0.0, QColor(148, 163, 184, 70))
+                    grad.setColorAt(1.0, QColor(148, 163, 184, 8))
+                    p.setBrush(QBrush(grad))
+                    p.drawPolygon(quad)
+            p.setBrush(QColor(ROOM_FLOOR))
+            p.drawPath(union)
+            # UMA grade de 1 m, nos eixos do primeiro chão, cobrindo a sala toda
+            (x0, y0), (x1, y1), _c, (x3, y3) = ref.floor
+            wl, dl = math.hypot(x1 - x0, y1 - y0) or 1.0, math.hypot(x3 - x0, y3 - y0) or 1.0
+            u, v = ((x1 - x0) / wl, (y1 - y0) / wl), ((x3 - x0) / dl, (y3 - y0) / dl)
+            us, vs = [], []
+            for s in group:
+                for cx, cy in s.floor:
+                    us.append(((cx - x0) * u[0] + (cy - y0) * u[1]) / upm)
+                    vs.append(((cx - x0) * v[0] + (cy - y0) * v[1]) / upm)
+            u0, u1, v0, v1 = min(us), max(us), min(vs), max(vs)
+            p.save()
+            p.setClipPath(union)
+            p.setPen(QPen(QColor(255, 255, 255, 20), 1))
+            for k in range(math.ceil(u0), math.floor(u1) + 1):
+                a = (x0 + (u[0] * k + v[0] * v0) * upm, y0 + (u[1] * k + v[1] * v0) * upm)
+                b = (x0 + (u[0] * k + v[0] * v1) * upm, y0 + (u[1] * k + v[1] * v1) * upm)
+                p.drawLine(QPointF(*pj.project(*a)), QPointF(*pj.project(*b)))
+            for k in range(math.ceil(v0), math.floor(v1) + 1):
+                a = (x0 + (u[0] * u0 + v[0] * k) * upm, y0 + (u[1] * u0 + v[1] * k) * upm)
+                b = (x0 + (u[0] * u1 + v[0] * k) * upm, y0 + (u[1] * u1 + v[1] * k) * upm)
+                p.drawLine(QPointF(*pj.project(*a)), QPointF(*pj.project(*b)))
+            p.restore()
+            bad = any(g.status in ("offline", "credentials", "limit") for g in group)
+            pen = QPen(ALERT_COLOR["warn"] if bad else QColor(148, 163, 184, 170), 1.6)
+            if bad:
+                pen.setStyle(Qt.PenStyle.DashLine)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(pen)
+            p.drawPath(union)
+            for s in group:                                             # a câmera selecionada: destaque no chão que ela cobre
+                if self.sel[0] == s.camera_id and self.sel[1] == 0:
+                    p.setPen(QPen(ACCENT, 2.0, Qt.PenStyle.DashLine))
+                    p.drawPolygon(QPolygonF([QPointF(*q) for q in pj.polygon(s.floor, 0)]))
+            # medida única da sala (extensão total nos eixos da referência), no canto da frente
+            f = QFont(p.font())
+            f.setPixelSize(11)
+            p.setFont(f)
+            p.setPen(QColor(148, 163, 184))
+            front = max(pts, key=lambda q: q.y()) if pts else None
+            if front is not None:
+                p.drawText(QPointF(front.x() + 8, front.y() + 14), f"{u1 - u0:.1f} × {v1 - v0:.1f} m".replace(".", ","))
+
     def set_people_options(self, people: bool, trails: bool) -> None:
         self.show_people, self.show_trails = people, trails
         self._step_people()
         self.update()
 
+    def _cam_colors(self) -> dict:
+        return {s.camera_id: _CAM_COLORS[i % len(_CAM_COLORS)] for i, s in enumerate(self.scene.sections)}
+
+    def _fovs(self, p: QPainter, pj: iso.Projector) -> None:
+        """O que cada câmera enxerga, como um tom LEVE só dentro da sala (recortado à placa): nada de triângulos saindo do mapa. A câmera
+        selecionada ganha um tom mais forte e as arestas da visão."""
+        colors = self._cam_colors()
+        for group in self._room_groups():
+            p.save()
+            p.setClipPath(self._union_path(pj, group))
+            for s in group:
+                if len(s.fov) != 3 or s.status != "ok":
+                    continue
+                selected = self.sel[0] == s.camera_id
+                col = QColor(colors[s.camera_id])
+                col.setAlpha(46 if selected else 14)
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(col)
+                tri = QPolygonF([QPointF(*pj.project(x, y, 0.0)) for x, y in s.fov])
+                p.drawPolygon(tri)
+                if selected:
+                    col.setAlpha(120)
+                    p.setPen(QPen(col, 1.0, Qt.PenStyle.DashLine))
+                    p.drawLine(tri.at(0), tri.at(1))
+                    p.drawLine(tri.at(0), tri.at(2))
+            p.restore()
+
+    def _cameras(self, p: QPainter, pj: iso.Projector) -> None:
+        """Ícone de cada câmera NA PAREDE da sala (a posição real pode estar fora do chão calibrado: vai para o ponto mais próximo da borda,
+        na direção certa), na altura dela (limitada), apontando para o centro da sala, com o nome curto."""
+        colors = self._cam_colors()
+        f = QFont(p.font())
+        f.setPixelSize(10)
+        f.setBold(True)
+        for group in self._room_groups():
+            union = self._union_path(pj, group)
+            pts = self._outline(union)
+            if len(pts) < 3:
+                continue
+            cx = sum(q.x() for q in pts) / len(pts)
+            cy = sum(q.y() for q in pts) / len(pts)
+            for s in group:
+                if not s.camera:
+                    continue
+                col = QColor(colors[s.camera_id])
+                x, y, z = s.camera
+                upm = s.units_per_m or 1.0
+                ground = QPointF(*pj.project(x, y, 0.0))
+                if not union.contains(ground):                           # fora da sala: encosta na parede mais próxima
+                    ground = _nearest_on_polygon(ground, pts)
+                    dirx, diry = ground.x() - cx, ground.y() - cy
+                    n = math.hypot(dirx, diry) or 1.0
+                    ground = QPointF(ground.x() + dirx / n * 6, ground.y() + diry / n * 6)
+                lift = abs(pj.project(0, 0, min(max(z / upm, 0.8), 1.6) * upm)[1] - pj.project(0, 0, 0)[1])
+                pos = QPointF(ground.x(), ground.y() - lift)
+                ang = math.degrees(math.atan2(cy - pos.y(), cx - pos.x()))
+                p.setPen(QPen(QColor(col.red(), col.green(), col.blue(), 120), 1.2))
+                p.drawLine(ground, pos)                                   # haste curta até o chão
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor(0, 0, 0, 90))
+                p.drawEllipse(ground, 4.0, 2.0)
+                p.save()
+                p.translate(pos)
+                p.rotate(ang)                                             # a lente aponta para o centro da sala
+                p.setPen(QPen(QColor(10, 14, 22, 230), 1.2))
+                p.setBrush(col)
+                p.drawRoundedRect(QRectF(-8, -5, 14, 10), 2.5, 2.5)
+                p.drawPolygon(QPolygonF([QPointF(6, -3), QPointF(11, -5.5), QPointF(11, 5.5), QPointF(6, 3)]))
+                p.restore()
+                p.setFont(f)
+                p.setPen(QColor("#cbd5e1"))
+                p.drawText(QPointF(pos.x() - 16, pos.y() - 10), s.name)
+
     def _people_layer(self, p: QPainter, pj: iso.Projector) -> None:
         """Pessoas por cima do mapa: rastro, sombra no chão e um boneco curto (altura projetada), do fundo para a frente."""
-        colors = {s.camera_id: _CAM_COLORS[i % len(_CAM_COLORS)] for i, s in enumerate(self.scene.sections)}
+        colors = self._cam_colors()
         order = sorted(self._markers, key=lambda m: pj.depth(m.x, m.y))
+        if len(order) >= CROWD_FROM:                      # sala cheia: um ponto por pessoa (sem sombra, boneco nem rastro)
+            p.setPen(QPen(QColor(10, 14, 22, 200), 1.0))
+            for m in order:
+                col = QColor(colors.get(m.camera_id, "#38bdf8"))
+                x, y = pj.project(m.x, m.y, 0.02)
+                p.setBrush(col)
+                p.drawEllipse(QPointF(x, y), 4.0, 4.0)
+                if self._merged.get((m.camera_id, m.pid), 1) > 1:
+                    p.setBrush(Qt.BrushStyle.NoBrush)
+                    p.setPen(QPen(QColor(255, 255, 255, 200), 1.2))
+                    p.drawEllipse(QPointF(x, y), 6.5, 6.5)
+                    p.setPen(QPen(QColor(10, 14, 22, 200), 1.0))
+            return
         for m in order:
             col = QColor(colors.get(m.camera_id, "#38bdf8"))
             if self.show_trails and len(m.trail) > 1:
@@ -219,6 +419,10 @@ class IsoMapView(QWidget):
             p.setPen(QPen(QColor(255, 255, 255, 220), 1.2))
             p.setBrush(col)
             p.drawEllipse(QPointF(head[0], head[1] - 4), 4.5, 4.5)
+            if self._merged.get((m.camera_id, m.pid), 1) > 1:        # vista por mais de uma câmera: anel em volta
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.setPen(QPen(QColor(255, 255, 255, 200), 1.6))
+                p.drawEllipse(QPointF(head[0], head[1] - 4), 8.0, 8.0)
 
     def _toggle_blink(self) -> None:
         self._blink = not self._blink
@@ -236,17 +440,19 @@ class IsoMapView(QWidget):
             return
         pj = self.projector()
         self._grid(p, pj)
+        self._rooms(p, pj)
         for s in self.scene.sections:
             self._section(p, pj, s)
+        self._fovs(p, pj)
         labels_to_draw = []
         for b in iso_order(self.scene, pj):
             self._block(p, pj, b)
             labels_to_draw.append(b)
         if self.show_people and self._markers:
             self._people_layer(p, pj)
+        self._cameras(p, pj)
         self._labels(p, pj, labels_to_draw)
-        for s in self.scene.sections:
-            self._section_caption(p, pj, s)
+        self._captions(p, pj)
         p.end()
 
     def _grid(self, p: QPainter, pj: iso.Projector) -> None:
@@ -268,6 +474,8 @@ class IsoMapView(QWidget):
     def _section(self, p: QPainter, pj: iso.Projector, s: M.Section) -> None:
         poly = QPolygonF([QPointF(*q) for q in pj.polygon(s.quad, 0)])
         floor = QColor(FLOOR)
+        if len(s.floor) == 4:                         # chão calibrado: quem desenha é a sala (_rooms); o retângulo da câmera não aparece
+            return
         pen_color = {"ok": QColor(255, 255, 255, 40), "connecting": QColor(255, 255, 255, 30), "offline": ALERT_COLOR["crit"],
                      "credentials": ALERT_COLOR["warn"], "limit": ALERT_COLOR["warn"]}[s.status]
         selected = self.sel[0] == s.camera_id and self.sel[1] == 0
@@ -278,10 +486,28 @@ class IsoMapView(QWidget):
         p.setPen(pen)
         p.drawPolygon(poly)
 
-    def _section_caption(self, p: QPainter, pj: iso.Projector, s: M.Section) -> None:
-        corners = pj.polygon(s.quad, 0)
-        back = min(corners, key=lambda c: c[1])                                 # canto mais ao fundo na tela
-        text = s.name + (f" · {SECTION_STATUS_TEXT[s.status]}" if SECTION_STATUS_TEXT[s.status] else "")
+    def _captions(self, p: QPainter, pj: iso.Projector) -> None:
+        """Nomes das câmeras: câmeras da MESMA sala (com o chão calibrado) dividem UM rótulo, preso ao canto mais ao fundo da sala; as demais
+        ficam no canto da própria zona. Sem isso o nome ficava no retângulo antigo da câmera, longe do chão desenhado."""
+        rooms: dict = {}
+        singles = []
+        for s in self.scene.sections:
+            if len(s.floor) == 4 and (s.room or "").strip():
+                rooms.setdefault(s.room.strip().lower(), []).append(s)
+            else:
+                singles.append(s)
+        for group in rooms.values():
+            names = " + ".join(s.name + (f" · {SECTION_STATUS_TEXT[s.status]}" if SECTION_STATUS_TEXT[s.status] else "") for s in group)
+            if len(group) > 1:
+                names = f"{group[0].room.strip()}  ·  {names}"
+            corners = [c for s in group for c in pj.polygon(s.floor, 0)]
+            self._caption(p, min(corners, key=lambda c: c[1]), names, any(s.status not in ("ok", "connecting") for s in group))
+        for s in singles:
+            corners = pj.polygon(s.floor if len(s.floor) == 4 else s.quad, 0)
+            text = s.name + (f" · {SECTION_STATUS_TEXT[s.status]}" if SECTION_STATUS_TEXT[s.status] else "")
+            self._caption(p, min(corners, key=lambda c: c[1]), text, s.status not in ("ok", "connecting"))
+
+    def _caption(self, p: QPainter, back, text: str, warn: bool) -> None:
         f = QFont(p.font())
         f.setPixelSize(12)
         f.setBold(True)
@@ -293,7 +519,7 @@ class IsoMapView(QWidget):
         bg = QColor(10, 14, 22, 200)
         p.setBrush(bg)
         p.drawRoundedRect(rect, 6, 6)
-        p.setPen(ALERT_COLOR["warn"] if s.status not in ("ok", "connecting") else QColor("#cbd5e1"))
+        p.setPen(ALERT_COLOR["warn"] if warn else QColor("#cbd5e1"))
         p.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
 
     def _block(self, p: QPainter, pj: iso.Projector, b: M.Block) -> None:
@@ -439,6 +665,21 @@ class IsoMapView(QWidget):
             text = f"{s.name}\n{SECTION_STATUS_TEXT.get(s.status) or 'ao vivo'}" if s else ""
         if text:
             QToolTip.showText(ev.globalPosition().toPoint(), text, self)
+
+
+def _nearest_on_polygon(pt: QPointF, poly: list) -> QPointF:
+    """O ponto do contorno (em tela) mais perto de `pt`."""
+    best, best_d = poly[0], float("inf")
+    for i, a in enumerate(poly):
+        b = poly[(i + 1) % len(poly)]
+        dx, dy = b.x() - a.x(), b.y() - a.y()
+        n2 = dx * dx + dy * dy
+        t = 0.0 if n2 == 0 else max(0.0, min(1.0, ((pt.x() - a.x()) * dx + (pt.y() - a.y()) * dy) / n2))
+        q = QPointF(a.x() + t * dx, a.y() + t * dy)
+        d = (q.x() - pt.x()) ** 2 + (q.y() - pt.y()) ** 2
+        if d < best_d:
+            best, best_d = q, d
+    return best
 
 
 def iso_order(scene: M.Scene, pj: iso.Projector) -> List[M.Block]:

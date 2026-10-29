@@ -56,7 +56,7 @@ o desenho em `ui/map_view.py` e a página em `ui/map_page.py`. Dados ao vivo vê
 Geometria pura em `app/charts/models.py` (+ `tests/test_chart_models.py`); desenho `QPainter` em `app/ui/charts.py` (espaço lógico de 680 px, escalado); cartão com tabela alternativa em `analytics_page.py`.
 
 **Largura mínima da janela:** cada página soma ao mínimo da janela. Rótulos de uma linha só (legendas, dicas) e painéis de largura fixa fazem a janela exigir centenas de pixels
-(o Mapa chegou a pedir 1681 px). Use rótulos que quebram linha com `QSizePolicy.Ignored` e painéis com mínimo/máximo, não largura fixa.
+(o Mapa chegou a pedir 1681 px). Use rótulos que quebram linha com `QSizePolicy.Ignored`. O painel lateral do Mapa tem largura fixa (340 px) porque seus rótulos não pedem largura; um painel fixo só é seguro assim.
 
 ## Armadilhas do ambiente
 

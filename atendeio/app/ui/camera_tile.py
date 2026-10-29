@@ -84,6 +84,23 @@ class CameraTile(QFrame):
         root.addLayout(bar)
 
         self.video = VideoView()
+        # aviso: a cena mudou (câmera ou mobília movida) -> as áreas e o chão calibrado podem não valer mais
+        self._moved = QFrame()
+        self._moved.setObjectName("card")
+        ml = QHBoxLayout(self._moved)
+        self._moved_text = QLabel("⚠ A imagem desta câmera mudou bastante (câmera ou mesa movida?). Remapeie as áreas e, no Mapa, o chão.")
+        self._moved_text.setWordWrap(True)
+        self._moved_text.setStyleSheet("color:#fbbf24;")
+        remap = QPushButton("Remapear áreas")
+        remap.setProperty("primary", True)
+        remap.clicked.connect(lambda: self.edit_zones_requested.emit(self.cam_id))
+        ok = QPushButton("Está tudo certo")
+        ok.setToolTip("Aceita a imagem de agora como a referência")
+        ok.clicked.connect(self._accept_view)
+        ml.addWidget(self._moved_text, 1)
+        ml.addWidget(remap)
+        ml.addWidget(ok)
+        self._moved.hide()
         self._unlock = QPushButton("Editar a câmera para informar usuário e senha")
         self._unlock.setProperty("primary", True)
         self._unlock.clicked.connect(lambda: self.unlock_requested.emit(self.cam_id))
@@ -93,6 +110,7 @@ class CameraTile(QFrame):
         self._caption.clicked.connect(lambda: self.objects_requested.emit(self.cam_id))
         media = QVBoxLayout()                    # coluna do vídeo
         media.setContentsMargins(0, 0, 0, 0)
+        media.addWidget(self._moved)
         media.addWidget(self.video)
         media.addWidget(self._unlock)
         media.addWidget(self._caption)
@@ -212,6 +230,7 @@ class CameraTile(QFrame):
         now = time.monotonic()
         self._fps.setText(f"{self._frames} fps" if self._last_frame else "")
         self._frames = 0
+        self._moved.setVisible(self.cam_id in self.core.view_changed_ids())
         silent = now - (self._last_frame or self._started_at)
         if silent > (8 if self.cam["kind"] == "rtsp" else 5):
             self.video.set_message(
@@ -220,6 +239,13 @@ class CameraTile(QFrame):
                      "(feche-o) ou estar desconectada.")
 
     # -- ações -------------------------------------------------------------------------------------
+    def _accept_view(self) -> None:
+        try:
+            self.core.accept_view(self.cam_id)
+        except DomainError as e:
+            self._warn(e)
+        self._moved.hide()
+
     def _warn(self, e: Exception) -> None:
         QMessageBox.warning(self, "atendeIO", str(e))
 

@@ -63,6 +63,19 @@ class CameraRepository:
         except sqlite3.IntegrityError:
             raise ConflictError("Já existe uma câmera cadastrada nesse endereço.")
 
+    def get_view_sig(self, cam_id: int) -> Optional[bytes]:
+        with closing(self._db.connect()) as c:
+            row = c.execute("SELECT view_sig FROM cameras WHERE id=?", (cam_id,)).fetchone()
+        return bytes(row["view_sig"]) if row and row["view_sig"] is not None else None
+
+    def set_view_sig(self, cam_id: int, sig: Optional[bytes]) -> None:
+        with closing(self._db.connect()) as c, c:
+            c.execute("UPDATE cameras SET view_sig=? WHERE id=?", (sig, cam_id))
+
+    def update_room(self, cam_id: int, user_id: int, room: str) -> bool:
+        with closing(self._db.connect()) as c, c:
+            return c.execute("UPDATE cameras SET room=? WHERE id=? AND user_id=?", (room, cam_id, user_id)).rowcount > 0
+
     def get_fps(self, cam_id: int) -> tuple:
         """(fps_view, fps_monitor) da câmera; None = usar o padrão do sistema. Sem filtro de dono: só o motor consulta."""
         with closing(self._db.connect()) as c:

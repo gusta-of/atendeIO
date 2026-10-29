@@ -8,8 +8,12 @@ import math
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from functools import lru_cache
+
+from ..analytics.camera_geometry import CameraGeometry
 from ..analytics.geometry import point_in_polygon
 from . import iso, labels
+from .room_merge import Dot, Person, merge
 
 DEFAULT_ASPECT = 16 / 9
 SECTION_GAP = 0.3            # espaço entre zonas no layout automático (em unidades de altura de câmera)
@@ -50,7 +54,7 @@ class AlertRules:
 @dataclass(frozen=True)
 class Alert:
     level: str                 # "warn" | "crit"
-    kind: str                  # clean | queue | offline | credentials | limit
+    kind: str                  # clean | queue | offline | credentials | limit | view
     camera_id: int
     zone_id: Optional[int]
     text: str
@@ -113,6 +117,13 @@ class Section:
     people: List[Tuple[int, float, float]] = field(default_factory=list)   # (id, x, y) no mundo: os pés de cada pessoa
     quad: List[Tuple[float, float]] = field(default_factory=list)          # os 4 cantos no mundo, já girados (é o que se desenha)
     rot: float = 0.0
+    room: str = ""                                                         # sala da câmera (vazio = sem sala)
+    units_per_m: Optional[float] = None                                    # unidades do mundo por metro (só com o chão calibrado)
+    floor: List[Tuple[float, float]] = field(default_factory=list)         # os 4 cantos (mundo) do chão calibrado = a forma da sala; vazio sem calibração
+    floor_m: Optional[Tuple[float, float]] = None                          # (largura, profundidade) reais desse chão, em metros
+    people_sigma: List[Tuple[int, float, float, float]] = field(default_factory=list)   # (id, x, y, incerteza em metros) para a união entre câmeras
+    camera: Optional[Tuple[float, float, float]] = None                    # (x, y, z) no mundo: onde a câmera está (recuperado do chão calibrado)
+    fov: List[Tuple[float, float]] = field(default_factory=list)           # triângulo no chão (mundo) do que ela enxerga
 
 
 @dataclass
@@ -120,6 +131,7 @@ class Scene:
     sections: List[Section]
     alerts: List[Alert]
     totals: dict
+    crowd: List[Person] = field(default_factory=list)   # pessoas SEM duplicar (a mesma pessoa em 2 câmeras da mesma sala conta uma vez)
 
     def block(self, camera_id: int, zone_id: int) -> Optional[Block]:
         for s in self.sections:
@@ -179,6 +191,17 @@ def camera_status(camera: dict, state: Optional[dict], limit_reached: bool = Fal
     return "ok" if state.get("online", True) else "offline"
 
 
+def _floor_corners(lay: "Layout", aspect: float, calib) -> List[Tuple[float, float]]:
+    """O chão marcado na calibração (largura × profundidade reais) como retângulo no mundo: é a forma da sala no mapa."""
+    if calib is None:
+        return []
+    k = calib.units_per_m(aspect)
+    hw, hd = calib.width * k / 2, calib.depth * k / 2
+    cx, cy = aspect / 2, 0.5
+    return [lay.world(cx - hw, cy - hd, aspect), lay.world(cx + hw, cy - hd, aspect),
+            lay.world(cx + hw, cy + hd, aspect), lay.world(cx - hw, cy + hd, aspect)]
+
+
 def to_world(lay: "Layout", aspect: float, calib, x: float, y: float) -> Tuple[float, float]:
     """Ponto da imagem (0..1) no mundo. Com calibração do chão a perspectiva é corrigida; sem ela, mapeamento linear aproximado."""
     if calib is not None:
@@ -188,12 +211,66 @@ def to_world(lay: "Layout", aspect: float, calib, x: float, y: float) -> Tuple[f
     return lay.world(x * aspect, y, aspect)
 
 
+@lru_cache(maxsize=32)
+def geometry_for(calib, aspect: float) -> Optional[CameraGeometry]:
+    """Posição e inclinação da câmera recuperadas do chão calibrado (ou None se a calibração não for coerente)."""
+    g = CameraGeometry.from_calibration(calib._h(), calib.width, calib.depth, round(aspect, 4))
+    return g if g.valid else None
+
+
+def plan_to_world(lay: "Layout", aspect: float, calib, X: float, Y: float) -> Tuple[float, float]:
+    """Ponto do plano do chão em METROS (origem no canto do fundo à esquerda do chão calibrado) -> mundo do mapa."""
+    k = calib.units_per_m(aspect)
+    return lay.world(aspect / 2 + (X - calib.width / 2) * k, 0.5 + (Y - calib.depth / 2) * k, aspect)
+
+
+def _person_world(t: dict, lay: "Layout", aspect: float, calib, geom: Optional[CameraGeometry]) -> Tuple[float, float]:
+    """Onde a pessoa está no mapa. Com o chão calibrado, pela MESMA geometria que decide se a mesa está ocupada (pés se em pé, cabeça se
+    sentada ou encoberta); sem ela, o ponto dos pés pela homografia ou o mapeamento linear."""
+    if geom is not None and t.get("h"):
+        pos = geom.person_floor((t["x"] - 0.01, t["y"] - t["h"], t["x"] + 0.01, t["y"]))
+        if pos is not None:
+            return plan_to_world(lay, aspect, calib, *pos)
+    return to_world(lay, aspect, calib, t["x"], t["y"])
+
+
+def _camera_world(geom: Optional[CameraGeometry], lay: "Layout", aspect: float, calib) -> Optional[Tuple[float, float, float]]:
+    if geom is None:
+        return None
+    x, y = plan_to_world(lay, aspect, calib, float(geom.C[0]), float(geom.C[1]))
+    return (x, y, geom.height_m * calib.units_per_m(aspect) * lay.scale)
+
+
+FOV_REACH_M = 12.0       # o triângulo de visão não vai além disto da câmera (o horizonte da imagem estica o chão ao infinito)
+
+
+def _fov_wedge(geom: CameraGeometry, lay: "Layout", aspect: float, calib) -> List[Tuple[float, float]]:
+    """Triângulo no chão (mundo) do que a câmera enxerga: do ponto sob a câmera até o chão do fundo da imagem, à esquerda e à direita."""
+    ground = (float(geom.C[0]), float(geom.C[1]))
+
+    def far_point(x: float):
+        for y in (i / 20 for i in range(0, 20)):               # de cima (fundo) para baixo: o primeiro nível que bate no chão
+            q = geom.at_height(x, y, 0.0)
+            if q is not None:
+                d = math.hypot(q[0] - ground[0], q[1] - ground[1])
+                k = FOV_REACH_M / d if d > FOV_REACH_M else 1.0
+                return (ground[0] + (q[0] - ground[0]) * k, ground[1] + (q[1] - ground[1]) * k)
+        return None
+    left, right = far_point(0.0), far_point(1.0)
+    if left is None or right is None:
+        return []
+    return [plan_to_world(lay, aspect, calib, *p) for p in (ground, left, right)]
+
+
 # -- cena -------------------------------------------------------------------------------------------------------------
 def _block(camera_id: int, zone: dict, area: Optional[dict], state: Optional[dict], lay: Layout, aspect: float,
-           status: str, blind: bool, rules: AlertRules, calib=None, lift: float = 0.0) -> Block:
-    # mesa: o polígono é o TAMPO; com o chão calibrado ele desce até a base (o chão da mesa) antes de ir para a planta
-    dy = lift if (calib is not None and zone["kind"] == "mesa") else 0.0
-    pts = [to_world(lay, aspect, calib, x, y + dy) for x, y in zone["points"]]
+           status: str, blind: bool, rules: AlertRules, calib=None) -> Block:
+    geom = geometry_for(calib, aspect) if calib is not None else None
+    foot = geom.table_footprint(zone["points"]) if (geom is not None and zone["kind"] == "mesa") else None
+    if foot is not None:                          # mesa: o polígono é o TAMPO; a pegada no chão (retroprojetada à altura do tampo) é o que vai ao mapa
+        pts = [plan_to_world(lay, aspect, calib, X, Y) for X, Y in foot]
+    else:
+        pts = [to_world(lay, aspect, calib, x, y) for x, y in zone["points"]]
     kind = zone["kind"]
     no_read = blind and kind == "mesa"
     stat = area.get("status") if (area and kind == "mesa" and not no_read) else None
@@ -226,7 +303,7 @@ def _block(camera_id: int, zone: dict, area: Optional[dict], state: Optional[dic
 def build_scene(cameras: Sequence[dict], zones: Dict[int, list], states: Dict[int, Optional[dict]],
                 layouts: Dict[int, Layout], aspects: Optional[Dict[int, float]] = None,
                 rules: Optional[AlertRules] = None, limited: Sequence[int] = (), calibs: Optional[Dict[int, object]] = None,
-                lifts: Optional[Dict[int, object]] = None) -> Scene:
+                merger=None, now: float = 0.0) -> Scene:
     """Monta a cena inteira. `layouts` pode estar incompleto: o que faltar vem do `auto_layout`."""
     rules = rules or AlertRules()
     aspects = dict(aspects or {})
@@ -246,9 +323,8 @@ def build_scene(cameras: Sequence[dict], zones: Dict[int, list], states: Dict[in
         areas = {a["id"]: a for a in (st or {}).get("areas", [])}
         blind = labels.no_reading(st)
         calib = (calibs or {}).get(cid)
-        lift_fn = (lifts or {}).get(cid)             # y_base -> descida do tampo até o chão (fração do quadro)
-        blocks = [_block(cid, z, areas.get(z["id"]), st, lay, aspect, status, blind, rules, calib,
-                         lift_fn(max(y for _, y in z["points"])) if (lift_fn and z["points"]) else 0.0) for z in zones.get(cid, [])]
+        blocks = [_block(cid, z, areas.get(z["id"]), st, lay, aspect, status, blind, rules, calib) for z in zones.get(cid, [])]
+        geom = geometry_for(calib, aspect) if calib is not None else None
         summary = CameraSummary(cid, cam["name"], status, fps=float((st or {}).get("fps") or 0.0),
                                 people=(st or {}).get("people") if status == "ok" else None, reading=not blind)
         for b in blocks:
@@ -261,18 +337,27 @@ def build_scene(cameras: Sequence[dict], zones: Dict[int, list], states: Dict[in
             cam_alerts.append(Alert("warn", "credentials", cid, None, f"{cam['name']} aguardando usuário e senha"))
         elif status == "limit":
             cam_alerts.append(Alert("warn", "limit", cid, None, f"{cam['name']}: limite de câmeras simultâneas"))
+        if cam.get("view_changed"):
+            cam_alerts.append(Alert("warn", "view", cid, None, f"{cam['name']}: a imagem mudou (câmera ou mesa movida?) — remapear áreas e chão"))
         summary.alerts = len(cam_alerts)
         alerts += cam_alerts
-        feet = [(t["id"], *to_world(lay, aspect, calib, t["x"], t["y"]))
-                for t in (st or {}).get("tracks", [])] if status == "ok" else []
+        feet = [(t["id"], *_person_world(t, lay, aspect, calib, geom)) for t in (st or {}).get("tracks", [])] if status == "ok" else []
+        sig = ([calib.foot_sigma_m(t["x"], t["y"], aspect) if calib is not None else 1.0 for t in (st or {}).get("tracks", [])]
+               if status == "ok" else [])
         sections.append(Section(cid, cam["name"], (lay.x, lay.y, lay.x + aspect * lay.scale, lay.y + lay.scale), status, blocks, summary, feet,
-                                [lay.world(a, b, aspect) for a, b in ((0, 0), (aspect, 0), (aspect, 1), (0, 1))], lay.rot))
+                                [lay.world(a, b, aspect) for a, b in ((0, 0), (aspect, 0), (aspect, 1), (0, 1))], lay.rot,
+                                cam.get("room") or "", calib.units_per_m(aspect) * lay.scale if calib is not None else None,
+                                _floor_corners(lay, aspect, calib), (calib.width, calib.depth) if calib is not None else None,
+                                [(pid, x, y, sg) for (pid, x, y), sg in zip(feet, sig)],
+                                _camera_world(geom, lay, aspect, calib), _fov_wedge(geom, lay, aspect, calib) if geom is not None else []))
     alerts.sort(key=lambda a: (0 if a.level == "crit" else 1, a.text))
-    totals = {"people": sum(s.summary.people or 0 for s in sections),
+    dots = [Dot(s.camera_id, pid, x, y, s.room, s.units_per_m, sg, s.floor or None) for s in sections for pid, x, y, sg in s.people_sigma]
+    crowd, duplicates = merger.merge(dots, now) if merger is not None else merge(dots)
+    totals = {"people": max(0, sum(s.summary.people or 0 for s in sections) - duplicates), "duplicates": duplicates,
               "tables": {k: sum(s.summary.tables[k] for s in sections) for k in ("livre", "ocupada", "a_limpar")},
               "alerts": len(alerts), "crit": sum(1 for a in alerts if a.level == "crit"),
               "cameras": len(sections), "cameras_ok": sum(1 for s in sections if s.status == "ok")}
-    return Scene(sections, alerts, totals)
+    return Scene(sections, alerts, totals, crowd)
 
 
 # -- geometria de tela / interação ---------------------------------------------------------------------------------
@@ -280,7 +365,9 @@ def scene_points(scene: Scene, pj: "iso.Projector") -> List[Tuple[float, float]]
     """Todos os pontos da cena em tela (para ajustar o zoom): cantos das zonas e topos dos blocos."""
     pts = []
     for s in scene.sections:
-        pts += pj.polygon(s.quad, 0)
+        pts += pj.polygon(s.floor or s.quad, 0)
+        if s.camera:
+            pts.append(pj.project(*s.camera))
         for b in s.blocks:
             pts += pj.polygon(b.footprint, b.height)
     return pts
