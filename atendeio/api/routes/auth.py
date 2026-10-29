@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.concurrency import run_in_threadpool
 
+from ...errors import NotFoundError
 from ..deps import COOKIE, current_user, get_container, session_token
 from ..schemas import Credentials
 
@@ -40,6 +41,16 @@ async def token(body: Credentials, request: Request):
     c = get_container(request)
     username, tok = await run_in_threadpool(c.auth.login, body.username, body.password, ip)
     return {"username": username, "token": tok, "expires_in": c.settings.session_ttl_s}
+
+
+@router.post("/local")
+async def local(request: Request):
+    """Sessão do dono local para o Electron (modo desktop). Só existe com o segredo de execução configurado: o
+    middleware já exige esse segredo em toda requisição, então só quem subiu o motor chega aqui."""
+    c = get_container(request)
+    if not (c.settings.desktop and c.settings.launch_secret):
+        raise NotFoundError("Não encontrado.")
+    return {"token": await run_in_threadpool(c.auth.open_local_session), "expires_in": c.settings.session_ttl_s}
 
 
 @router.post("/logout")

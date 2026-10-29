@@ -2,7 +2,9 @@ from fastapi import APIRouter, Depends, Request
 
 from ...services import rtsp
 from ..deps import current_user, get_container
-from ..schemas import LocalRequest, RtspRequest
+from fastapi.concurrency import run_in_threadpool
+
+from ..schemas import CameraCredentials, LocalRequest, RtspRequest
 
 router = APIRouter(prefix="/api", tags=["cameras"])
 
@@ -21,6 +23,15 @@ def add_rtsp(body: RtspRequest, request: Request, user: dict = Depends(current_u
     ok = svc.probe(svc.get_owned(cam["id"], user["id"]))  # avisa IP/senha errados, sem bloquear
     warning = None if ok else "Cadastrada, mas não consegui conectar agora. Confira IP, usuário e senha."
     return {"camera": cam, "warning": warning}
+
+
+@router.put("/cameras/{cam_id}/credentials")
+async def set_credentials(cam_id: int, body: CameraCredentials, request: Request, user: dict = Depends(current_user)):
+    """Usuário e senha da câmera RTSP depois de ligar o computador. Só em memória: nunca vão para o disco."""
+    c = get_container(request)
+    cam = await run_in_threadpool(c.cameras.set_credentials, cam_id, user["id"], body.username, body.password)
+    await run_in_threadpool(c.scheduler.tick)   # câmera monitorada volta a ser analisada já, sem esperar o próximo ciclo
+    return {"camera": cam}
 
 
 @router.get("/local-devices")

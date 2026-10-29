@@ -147,6 +147,11 @@ class EventBus:
         with self._lock:
             return len(self._subs)
 
+    def recent_since(self, seq: int) -> list:
+        """Eventos com `seq` maior que o informado (o painel de logs nativo consulta de tempos em tempos, sem SSE)."""
+        with self._lock:
+            return [e for e in self._ring if e["seq"] > seq]
+
     def recent(self, n: int = 50) -> list:
         with self._lock:
             return list(self._ring)[-n:]

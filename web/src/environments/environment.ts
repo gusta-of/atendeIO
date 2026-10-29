@@ -2,4 +2,5 @@
 export const environment = {
   production: false,
   pwa: false,
+  desktop: false,
 };

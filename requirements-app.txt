@@ -1,0 +1,7 @@
+# App desktop NATIVO (Qt): um processo, sem servidor local. Testado com Python 3.14.
+numpy==2.5.4
+# headless: o `opencv-python` traz plugins Qt próprios que brigam com o PySide6
+opencv-python-headless==5.0.0.93
+PySide6-Essentials>=6.8     # LGPL. NÃO usar PySide6-Addons/QtCharts (GPL/comercial)
+cryptography==50.0.2
+ultralytics==8.4.183        # provisório (YOLO via torch); sai quando o detector ONNX entrar

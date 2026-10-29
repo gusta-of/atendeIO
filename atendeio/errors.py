@@ -27,3 +27,8 @@ class ConflictError(DomainError):
 
 class RateLimitError(DomainError):
     """Muitas tentativas ou limite de recursos atingido (429)."""
+
+
+class CredentialsRequired(DomainError):
+    """Câmera RTSP sem usuário/senha nesta execução: o cliente precisa digitá-los (423). `code` é estável para a UI."""
+    code = "credentials_required"

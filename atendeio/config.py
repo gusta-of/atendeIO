@@ -1,10 +1,21 @@
 """Configuração: uma dataclass imutável lida das variáveis de ambiente."""
 
 import os
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from .resources import low_resource_defaults, total_ram_mb
+
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def _default_frontend() -> Path:
+    """Interface compilada (Ionic/Angular): a pasta do projeto foi renomeada de `frontend` para `web`; aceita as duas.
+    No instalador (PyInstaller) ela vai em `frontend/www`."""
+    for name in ("web", "frontend"):
+        if (ROOT / name / "www").exists():
+            return ROOT / name / "www"
+    return ROOT / "frontend" / "www"
 
 
 def _env(name: str, default: str) -> str:
@@ -13,12 +24,18 @@ def _env(name: str, default: str) -> str:
 
 @dataclass(frozen=True)
 class Settings:
+    # modo: "server" (hoje: vários utilizadores, credenciais RTSP cifradas no banco) ou "desktop" (agente no cliente:
+    # credenciais RTSP só em memória, pedidas a cada partida)
+    mode: str = "server"
+    launch_secret: str = ""   # segredo por execução (Electron -> motor): sem ele o motor recusa qualquer requisição (modo desktop)
+    parent_pid: int = 0       # modo desktop: se o Electron (pai) morrer, o motor se encerra sozinho (não fica órfão segurando a câmera)
+    run_key: str = ""   # chave Fernet por execução (vem do Electron, só em memória lá) que cifra o espelho temporário das credenciais
     # servidor
     host: str = "127.0.0.1"
     port: int = 8000
     # armazenamento
     static_dir: Path = ROOT / "static"                      # frontend antigo (convive até a virada)
-    frontend_dir: Path = ROOT / "frontend" / "www"           # frontend novo (Ionic/Angular compilado)
+    frontend_dir: Path = field(default_factory=_default_frontend)   # frontend novo (Ionic/Angular compilado)
     data_dir: Path = ROOT / "data"
     model_path: Path = ROOT / "yolov8n.pt"
     seg_model_path: Path = ROOT / "yolov8n-seg.pt"  # silhuetas (oclusão das áreas); baixa sozinho na 1ª vez
@@ -69,23 +86,36 @@ class Settings:
         return self.data_dir / "atendeio.db"
 
     @property
+    def run_dir(self) -> Path:
+        return self.data_dir / "run"   # temporário: apagado na saída; ilegível depois de reiniciar (a chave muda)
+
+    @property
+    def desktop(self) -> bool:
+        return self.mode == "desktop"
+
+    @property
     def key_path(self) -> Path:
         return self.data_dir / "secret.key"
 
     @classmethod
     def from_env(cls, **overrides) -> "Settings":
+        eco = low_resource_defaults(total_ram_mb())   # PC fraco: padrões mais leves (as variáveis explícitas vencem)
         s = cls(
+            mode=_env("MODE", cls.mode),
+            run_key=_env("RUN_KEY", ""),
+            parent_pid=int(_env("PARENT_PID", "0") or 0),
+            launch_secret=_env("LAUNCH_SECRET", ""),
             host=_env("HOST", cls.host),
             port=int(_env("PORT", str(cls.port))),
             data_dir=Path(_env("DATA", str(cls.data_dir))),
-            frontend_dir=Path(_env("FRONTEND_DIR", str(cls.frontend_dir))),
+            frontend_dir=Path(_env("FRONTEND_DIR", str(_default_frontend()))),
             secret_key=_env("SECRET_KEY", ""),
             allow_signup=_env("ALLOW_SIGNUP", "1") == "1",
             cookie_secure=_env("COOKIE_SECURE", "0") == "1",
             session_ttl_s=int(_env("SESSION_TTL", str(cls.session_ttl_s))),
             cors_origins=tuple(o.strip().rstrip("/") for o in _env("CORS_ORIGINS", "").split(",") if o.strip()),
             max_fps=float(_env("MAX_FPS", str(cls.max_fps))),
-            occlusion=_env("OCCLUSION", "1") == "1",
+            occlusion=_env("OCCLUSION", "0" if eco.get("occlusion") is False else "1") == "1",
             monitor_fps=float(_env("MONITOR_FPS", str(cls.monitor_fps))),
             timezone=_env("TIMEZONE", cls.timezone),
             flow_minute_days=int(_env("FLOW_MINUTE_DAYS", str(cls.flow_minute_days))),
@@ -95,8 +125,8 @@ class Settings:
             free_after_s=float(_env("FREE_AFTER", str(cls.free_after_s))),
             clean_after_s=float(_env("CLEAN_AFTER", str(cls.clean_after_s))),
             idle_ttl_s=float(_env("IDLE_TTL", str(cls.idle_ttl_s))),
-            jpeg_quality=int(_env("JPEG_QUALITY", str(cls.jpeg_quality))),
-            max_cameras=int(_env("MAX_CAMERAS", str(cls.max_cameras))),
-            max_cameras_per_user=int(_env("MAX_CAMERAS_PER_USER", str(cls.max_cameras_per_user))),
+            jpeg_quality=int(_env("JPEG_QUALITY", str(eco.get("jpeg_quality", cls.jpeg_quality)))),
+            max_cameras=int(_env("MAX_CAMERAS", str(eco.get("max_cameras", cls.max_cameras)))),
+            max_cameras_per_user=int(_env("MAX_CAMERAS_PER_USER", str(eco.get("max_cameras_per_user", cls.max_cameras_per_user)))),
         )
         return replace(s, **overrides)

@@ -16,7 +16,8 @@
     "cap:sync": "ng build -c native && cap sync",
     "cap:android": "pnpm run cap:sync && cap open android",
     "cap:ios": "pnpm run cap:sync && cap open ios",
-    "assets": "capacitor-assets generate --android --ios --iconBackgroundColor '#121826' --splashBackgroundColor '#121826'"
+    "assets": "capacitor-assets generate --android --ios --iconBackgroundColor '#121826' --splashBackgroundColor '#121826'",
+    "build:desktop": "ng build -c desktop"
   },
   "private": true,
   "dependencies": {

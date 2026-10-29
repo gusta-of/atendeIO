@@ -15,6 +15,7 @@ from .repositories.zones import ZoneRepository
 from .repositories.users import UserRepository
 from .security import SecretBox
 from .services.auth import AuthService
+from .services.credentials import SessionCredentials
 from .services.cameras import CameraService
 from .services.flow import FlowService
 from .services.monitor import MonitorScheduler, MonitorService
@@ -43,6 +44,7 @@ class Container:
     scheduler: MonitorScheduler
     detector: Detector
     registry: HubRegistry
+    credentials: Optional[SessionCredentials] = None   # só no modo desktop
 
 
 def build_container(settings: Settings, *, device_lister: Optional[Callable] = None,
@@ -51,7 +53,11 @@ def build_container(settings: Settings, *, device_lister: Optional[Callable] = N
     db.init()
     box = SecretBox(settings.secret_key, settings.key_path)
     users, sessions, cameras = UserRepository(db), SessionRepository(db), CameraRepository(db)
-    camera_service = CameraService(cameras, box, device_lister or list_v4l2_devices)
+    credentials = None
+    if settings.desktop:
+        cameras.wipe_secrets()   # nada de usuário/senha em disco, nem de versões antigas
+        credentials = SessionCredentials(settings.run_dir / "creds.bin", settings.run_key)
+    camera_service = CameraService(cameras, box, device_lister or list_v4l2_devices, credentials)
     detector = detector or Detector(settings.model_path, settings.conf_threshold, settings.seg_model_path)
     flow_repo = FlowRepository(db)
     flow_writer = FlowWriter(flow_repo, settings)
@@ -67,6 +73,7 @@ def build_container(settings: Settings, *, device_lister: Optional[Callable] = N
         recognition=RecognitionService(cameras, camera_service, settings),
         detector=detector,
         registry=registry,
+        credentials=credentials,
         flow=FlowService(flow_repo, camera_service, settings),
         tickets=TicketService(box.derive("media-tickets"), settings.ticket_ttl_s),
         flow_writer=flow_writer,

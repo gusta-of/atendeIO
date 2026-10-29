@@ -1,0 +1,3 @@
+# Empacotar o motor do agente desktop (rodar no sistema de destino)
+-r requirements.txt
+pyinstaller>=6.10

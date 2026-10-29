@@ -59,6 +59,7 @@ class CameraHub:
 
         self._pub_lock = threading.Lock()
         self._subs = []
+        self._fsubs = []   # espectadores NATIVOS (app desktop): recebem o quadro BGR direto, sem JPEG nem asyncio
         # Reconhecimento: chave geral + classes (None = todas, só em uso direto/testes; a API sempre passa a lista salva)
         self._recognition = (bool(enabled), None if classes is None else frozenset(classes))
         self.state = {**summarize([]), "areas": [], "people": 0, "size": None,
@@ -153,7 +154,15 @@ class CameraHub:
 
     def _has_video(self) -> bool:
         with self._pub_lock:
+            return bool(self._subs) or bool(self._fsubs)
+
+    def _has_web_video(self) -> bool:
+        with self._pub_lock:
             return bool(self._subs)
+
+    def _has_frame_subs(self) -> bool:
+        with self._pub_lock:
+            return bool(self._fsubs)
 
     def _infer(self):
         last_fid, fps = 0, 0.0
@@ -171,19 +180,21 @@ class CameraHub:
             target_fps = self._cfg.max_fps if has_video else self._cfg.monitor_fps
             try:
                 enabled, classes = self._recognition
-                wants = self._wanted()
+                wants, nwants = self._wanted(), self._wanted_frames()
                 # a silhueta só custa quando alguém vê as áreas, elas existem e há o que reconhecer
                 need_masks = bool(self._cfg.occlusion and enabled and classes != frozenset()
-                                  and any(areas for areas, _ in wants))
+                                  and any(areas for areas, _ in (wants | nwants)))
                 dets = self._detector.detect(frame, classes, masks=need_masks) if enabled else []
                 self.mask_frames += need_masks
-                variants = self._encode_variants(frame, dets, wants) if has_video else {}  # sem espectador: zero JPEG
-                if not has_video:
+                has_web = self._has_web_video()
+                variants = self._encode_variants(frame, dets, wants) if has_web else {}  # sem espectador web: zero JPEG
+                frames = self._render_frames(frame, dets, nwants) if self._has_frame_subs() else {}
+                if not has_web:
                     with self._pub_lock:  # não deixa um quadro velho de primeira imagem pro próximo espectador
                         self._jpeg = {(False, False): b""}
                 now = time.monotonic()
                 state = self._build_state(dets, frame.shape, now)
-                self._publish(variants, state)
+                self._publish(variants, state, frames)
                 self._emit_telemetry(dets, state, now)
             except Exception as e:  # um quadro ruim não derruba a câmera por horas (nem mata a thread em silêncio)
                 print(f"[-] inferência câmera {self.cam_id}: {type(e).__name__}: {e}")
@@ -225,6 +236,28 @@ class CameraHub:
             draw_detections(marked, dets)
             out[(False, True)] = enc(marked)
             self.boxed_encodes += 1
+        return out
+
+    def _render_frames(self, frame, dets: list, wants: set) -> dict:
+        """{(áreas, caixas): quadro BGR} para os espectadores nativos: o mesmo desenho do `_encode_variants`, sem codificar."""
+        out = {(False, False): frame}
+        if any(a for a, _ in wants):
+            statuses = {a["id"]: a["status"] for a in self.state.get("areas", []) if "status" in a}
+            occluders = [d["poly"] for d in dets
+                         if d.get("poly") and d["name"] not in self._cfg.occluder_exclude]
+            rec = self._recognition
+            blind = (not rec[0]) or rec[1] == frozenset() or (rec[1] is not None and 0 not in rec[1])
+            painted = frame.copy()
+            draw_areas(painted, self._analyzer.zones, statuses, occluders or None, blind)
+            out[(True, False)] = painted
+            if (True, True) in wants:
+                boxed = painted.copy()
+                draw_detections(boxed, dets)
+                out[(True, True)] = boxed
+        if (False, True) in wants:
+            marked = frame.copy()
+            draw_detections(marked, dets)
+            out[(False, True)] = marked
         return out
 
     def _emit_telemetry(self, dets: list, state: dict, now: float) -> None:
@@ -326,11 +359,18 @@ class CameraHub:
         with self._pub_lock:
             return {(areas and has_zones, boxes) for _, _, areas, boxes in self._subs}
 
-    def _publish(self, variants: dict, state: dict):
+    def _wanted_frames(self) -> set:
+        """Variantes (áreas, caixas) que os espectadores nativos pedem agora."""
+        has_zones = self._analyzer.has_zones
+        with self._pub_lock:
+            return {(areas and has_zones, boxes) for _, areas, boxes in self._fsubs}
+
+    def _publish(self, variants: dict, state: dict, frames: Optional[dict] = None):
         with self._pub_lock:
             self.state = state
             self._jpeg.update({k: v for k, v in variants.items() if v is not None})
             subs = list(self._subs)
+            fsubs = list(self._fsubs)
         clean = variants.get((False, False))
         has_zones = self._analyzer.has_zones
         for loop, q, areas, boxes in subs:
@@ -339,6 +379,15 @@ class CameraHub:
                 continue
             with contextlib.suppress(RuntimeError):  # loop já fechou
                 loop.call_soon_threadsafe(_put_latest, q, frame)
+        for callback, areas, boxes in fsubs:       # nativo: entrega o quadro desenhado + o estado, na thread da inferência
+            image = (frames or {}).get((areas and has_zones, boxes))
+            if image is None:
+                image = (frames or {}).get((False, False))
+            if image is not None:
+                try:
+                    callback(image, state)         # quem recebe só converte e entrega à interface (rápido, sem bloquear)
+                except Exception as e:
+                    print(f"[-] câmera {self.cam_id}: o ouvinte de vídeo falhou: {type(e).__name__}")
         self.ready.set()
 
     def last_jpeg(self, boxes: bool = False, areas: bool = False) -> bytes:
@@ -351,6 +400,18 @@ class CameraHub:
             self._subs.append((loop, q, areas, boxes))
         self._wake.set()
         return q
+
+    def subscribe_frames(self, callback: Callable, boxes: bool = True, areas: bool = True):
+        """Espectador nativo: `callback(quadro_bgr, estado)` a cada quadro processado. Devolve o token para `unsubscribe_frames`."""
+        token = (callback, areas, boxes)
+        with self._pub_lock:
+            self._fsubs.append(token)
+        self._wake.set()
+        return token
+
+    def unsubscribe_frames(self, token) -> None:
+        with self._pub_lock:
+            self._fsubs = [x for x in self._fsubs if x is not token]
 
     def unsubscribe(self, q) -> None:
         with self._pub_lock:

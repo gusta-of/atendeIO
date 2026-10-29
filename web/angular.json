@@ -119,6 +119,40 @@
                 "base": "www-native",
                 "browser": ""
               }
+            },
+            "desktop": {
+              "budgets": [
+                {
+                  "type": "initial",
+                  "maximumWarning": "2mb",
+                  "maximumError": "5mb"
+                },
+                {
+                  "type": "anyComponentStyle",
+                  "maximumWarning": "12kb",
+                  "maximumError": "24kb"
+                }
+              ],
+              "fileReplacements": [
+                {
+                  "replace": "src/environments/environment.ts",
+                  "with": "src/environments/environment.desktop.ts"
+                }
+              ],
+              "outputHashing": "all",
+              "baseHref": "/app/",
+              "optimization": {
+                "scripts": true,
+                "styles": {
+                  "minify": true,
+                  "inlineCritical": false
+                },
+                "fonts": false
+              },
+              "outputPath": {
+                "base": "www-desktop",
+                "browser": ""
+              }
             }
           },
           "defaultConfiguration": "production"
@@ -137,6 +171,9 @@
             },
             "native": {
               "buildTarget": "app:build:native"
+            },
+            "desktop": {
+              "buildTarget": "app:build:desktop"
             }
           },
           "defaultConfiguration": "development",

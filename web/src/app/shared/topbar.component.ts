@@ -3,6 +3,7 @@ import { RouterLink, RouterLinkActive } from '@angular/router';
 import { IonButtons, IonHeader, IonMenuButton, IonToolbar } from '@ionic/angular';
 
 import { AuthService } from '../core/auth.service';
+import { environment } from '../../environments/environment';
 
 /** Barra de cima das telas: menu (celular), marca, atalhos (telas largas) e sair. */
 @Component({
@@ -20,7 +21,9 @@ import { AuthService } from '../core/auth.service';
           </nav>
           <span class="grow"></span>
           <span class="muted small user">{{ auth.user() }}</span>
-          <button class="btn ghost mini" type="button" (click)="auth.logout()">Sair</button>
+          @if (!desktop) {
+            <button class="btn ghost mini" type="button" (click)="auth.logout()">Sair</button>
+          }
         </div>
       </ion-toolbar>
     </ion-header>
@@ -37,5 +40,6 @@ import { AuthService } from '../core/auth.service';
 })
 export class TopbarComponent {
   readonly auth = inject(AuthService);
+  readonly desktop = environment.desktop;   // no app desktop o dono local entra sozinho; sair não leva a lugar nenhum
   readonly title = input('atendeIO');
 }

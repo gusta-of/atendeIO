@@ -3,32 +3,46 @@
 import json
 import os
 import re
-from typing import Callable
+from typing import Callable, Optional
 
-from ..errors import NotFoundError, ValidationError
+from ..errors import CredentialsRequired, NotFoundError, ValidationError
 from ..repositories.cameras import CameraRepository
 from ..security import SecretBox
 from ..vision.sources import list_v4l2_devices, open_source
 from . import rtsp
+from .credentials import SessionCredentials
 
 
 def _clean_name(name: str, default: str) -> str:
     return re.sub(r"\s+", " ", (name or "").strip())[:60] or default
 
 
-def _public(cam: dict) -> dict:
-    """Visão segura pro cliente: nunca inclui `secret`."""
-    return {"id": cam["id"], "name": cam["name"], "kind": cam["kind"], "ref": cam["ref"]}
-
-
 class CameraService:
+    """`credentials` liga o modo "sem persistência": usuário e senha RTSP ficam só na memória (SessionCredentials) e a
+    coluna `secret` fica vazia. Sem ele (modo servidor) as credenciais seguem criptografadas no banco."""
+
     def __init__(self, cameras: CameraRepository, box: SecretBox,
-                 device_lister: Callable = list_v4l2_devices):
-        self._cameras, self._box, self._list_devices = cameras, box, device_lister
+                 device_lister: Callable = list_v4l2_devices, credentials: Optional[SessionCredentials] = None):
+        self._cameras, self._box, self._list_devices, self._creds = cameras, box, device_lister, credentials
+
+    def _public(self, cam: dict) -> dict:
+        """Visão segura pro cliente: nunca inclui `secret`."""
+        view = {"id": cam["id"], "name": cam["name"], "kind": cam["kind"], "ref": cam["ref"]}
+        if self._creds is not None and cam["kind"] == "rtsp":
+            view["needs_credentials"] = not self._creds.has(cam["id"])
+        return view
 
     # -- consulta -------------------------------------------------
     def list(self, user_id: int) -> list:
-        return [_public(c) for c in self._cameras.list_for_user(user_id)]
+        return [self._public(c) for c in self._cameras.list_for_user(user_id)]
+
+    def needs_credentials(self, cam: dict) -> bool:
+        """Câmera RTSP que ainda não recebeu usuário/senha nesta execução (sempre False no modo servidor)."""
+        return self._creds is not None and cam["kind"] == "rtsp" and not self._creds.has(cam["id"])
+
+    def require_credentials(self, cam: dict) -> None:
+        if self.needs_credentials(cam):
+            raise CredentialsRequired("Informe o usuário e a senha desta câmera (não ficam salvos).")
 
     def get_owned(self, cam_id: int, user_id: int) -> dict:
         """Câmera do utilizador. Se for de outro, é o mesmo NotFound de uma inexistente."""
@@ -51,10 +65,25 @@ class CameraService:
             raise ValidationError("Usuário ou senha da câmera muito longos.")
         host, port, path = rtsp.validate(host, port, path)
         ref = rtsp.public_ref(host, port, path)
-        blob = self._box.encrypt(json.dumps({"u": username or "", "p": password or ""}).encode())
+        blob = None if self._creds is not None else \
+            self._box.encrypt(json.dumps({"u": username or "", "p": password or ""}).encode())
         name = _clean_name(name, host)
         cam_id = self._cameras.add(user_id, name, "rtsp", ref, blob)
-        return {"id": cam_id, "name": name, "kind": "rtsp", "ref": ref}
+        if self._creds is not None:
+            self._creds.put(cam_id, username, password)
+        return self._public({"id": cam_id, "name": name, "kind": "rtsp", "ref": ref})
+
+    def set_credentials(self, cam_id: int, user_id: int, username: str, password: str) -> dict:
+        """Informa (de novo) usuário e senha de uma câmera RTSP: só na memória desta execução."""
+        cam = self.get_owned(cam_id, user_id)
+        if cam["kind"] != "rtsp":
+            raise ValidationError("Só câmeras de rede (RTSP) têm usuário e senha.")
+        if self._creds is None:
+            raise ValidationError("Neste modo as credenciais são salvas no cadastro da câmera.")
+        if len(username or "") > 128 or len(password or "") > 256:
+            raise ValidationError("Usuário ou senha da câmera muito longos.")
+        self._creds.put(cam_id, username, password)
+        return self._public(cam)
 
     def add_local(self, user_id: int, ref: str, name: str) -> dict:
         # só aceita o que o servidor realmente enumerou (nada de caminho livre)
@@ -63,11 +92,13 @@ class CameraService:
             raise NotFoundError("Dispositivo não encontrado.")
         name = _clean_name(name, dev["name"])
         cam_id = self._cameras.add(user_id, name, "local", dev["ref"])
-        return {"id": cam_id, "name": name, "kind": "local", "ref": dev["ref"]}
+        return self._public({"id": cam_id, "name": name, "kind": "local", "ref": dev["ref"]})
 
     def delete(self, cam_id: int, user_id: int) -> None:
         if not self._cameras.delete(cam_id, user_id):
             raise NotFoundError("Câmera não encontrada.")
+        if self._creds is not None:
+            self._creds.forget(cam_id)
 
     # -- fonte de vídeo -------------------------------------------
     def source_for(self, cam: dict):
@@ -76,8 +107,13 @@ class CameraService:
             return os.path.realpath(cam["ref"])  # /dev/videoN atual do id estável
         host, port, path = rtsp.parse_ref(cam["ref"])
         rtsp.check_host(host)  # reconfere a cada abertura (DNS pode ter mudado)
-        sec = json.loads(self._box.decrypt(cam["secret"]))
-        return rtsp.build_url(host, port, sec["u"], sec["p"], path)
+        if self._creds is not None:
+            self.require_credentials(cam)
+            username, password = self._creds.get(cam["id"])
+        else:
+            sec = json.loads(self._box.decrypt(cam["secret"]))
+            username, password = sec["u"], sec["p"]
+        return rtsp.build_url(host, port, username, password, path)
 
     def probe(self, cam: dict) -> bool:
         """Testa se a câmera abre agora (usado pra avisar IP/senha errados no cadastro)."""

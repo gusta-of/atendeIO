@@ -10,6 +10,7 @@ from ..streaming.hub import CameraHub
 async def acquire_hub(c: Container, cam: dict, user: dict) -> CameraHub:
     """Conta como espectador: a câmera liga mesmo que ninguém esteja vendo o vídeo, e respeita os limites.
     Quem chama deve `registry.release(hub)` ao terminar."""
+    c.cameras.require_credentials(cam)   # 423: o app mostra o pedido de usuário/senha, em vez de ficar sem imagem
     zones = await run_in_threadpool(c.zones.load, cam["id"])
     enabled, classes = parse_recognition(cam)
     return c.registry.acquire(cam["id"], user["id"], lambda: c.cameras.source_for(cam), zones, enabled, classes)

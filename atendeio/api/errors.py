@@ -12,6 +12,7 @@ _STATUS = [
     (errors.NotFoundError, 404),
     (errors.ConflictError, 409),
     (errors.RateLimitError, 429),
+    (errors.CredentialsRequired, 423),
 ]
 
 
@@ -19,4 +20,7 @@ def install(app: FastAPI) -> None:
     @app.exception_handler(errors.DomainError)
     async def _domain(_request: Request, exc: errors.DomainError):
         status = next((s for cls, s in _STATUS if isinstance(exc, cls)), 400)
-        return JSONResponse({"detail": str(exc)}, status_code=status)
+        body = {"detail": str(exc)}
+        if getattr(exc, "code", None):
+            body["code"] = exc.code
+        return JSONResponse(body, status_code=status)

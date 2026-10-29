@@ -67,11 +67,16 @@ class MonitorScheduler:
         self._repo, self._cameras, self._zones, self._registry, self._cfg = repo, cameras, zones, registry, settings
         self._tz = _zone(settings.timezone)
         self._held: set = set()
+        self._tick_lock = threading.Lock()   # `tick` também é chamado ao receber credenciais, fora da thread do agendador
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="monitor", daemon=True)
         self.last_errors: list = []
 
     def tick(self, now: Optional[datetime] = None) -> dict:
+        with self._tick_lock:
+            return self._tick(now)
+
+    def _tick(self, now: Optional[datetime]) -> dict:
         """Uma passada: segura (ou recria) os hubs que devem estar ligados agora e solta o resto."""
         now = now or datetime.now(self._tz)
         hhmm = now.astimezone(self._tz).strftime("%H:%M")
@@ -79,6 +84,9 @@ class MonitorScheduler:
         for cam in self._repo.list_monitored():
             if not person_ready(cam):
                 errors.append((cam["id"], "sem_pessoa"))     # reconhecimento mudou: sem "Pessoa" não há medida
+                continue
+            if self._cameras.needs_credentials(cam):
+                errors.append((cam["id"], "aguardando_credenciais"))   # não insiste: evita bloquear a conta na câmera
                 continue
             if in_window(hhmm, cam["monitor_from"], cam["monitor_to"]):
                 want[cam["id"]] = cam

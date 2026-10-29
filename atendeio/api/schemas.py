@@ -17,6 +17,11 @@ class RtspRequest(BaseModel):
     path: str = Field(default="", max_length=200)
 
 
+class CameraCredentials(BaseModel):
+    username: str = Field(default="", max_length=128)
+    password: str = Field(default="", max_length=256)
+
+
 class LocalRequest(BaseModel):
     ref: str = Field(max_length=300)
     name: str = Field(default="", max_length=80)

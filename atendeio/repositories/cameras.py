@@ -23,6 +23,11 @@ class CameraRepository:
         except sqlite3.IntegrityError:
             raise ConflictError("Essa câmera já está cadastrada ou em uso.")
 
+    def wipe_secrets(self) -> int:
+        """Apaga qualquer credencial que tenha sobrado no banco (modo desktop não guarda usuário/senha)."""
+        with closing(self._db.connect()) as c, c:
+            return c.execute("UPDATE cameras SET secret=NULL WHERE secret IS NOT NULL").rowcount
+
     def list_for_user(self, user_id: int) -> list:
         with closing(self._db.connect()) as c:
             rows = c.execute("SELECT * FROM cameras WHERE user_id=? ORDER BY id", (user_id,)).fetchall()

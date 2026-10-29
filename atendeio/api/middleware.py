@@ -1,5 +1,6 @@
 """Cabeçalhos de segurança e checagem de origem em requisições que alteram estado."""
 
+import hmac
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request, Response
@@ -11,13 +12,28 @@ CSP = ("default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe
 
 
 SESSION_COOKIE = "atendeio_session"
+LAUNCH_HEADER = "x-atendeio-launch"
+LOCAL_HOSTS = ("127.0.0.1", "localhost", "[::1]")
 
 
-def install(app: FastAPI, cors_origins: tuple = ()) -> None:
+def _hostname(host_header: str) -> str:
+    """`127.0.0.1:8000` -> `127.0.0.1`; `[::1]:8000` -> `[::1]`."""
+    if host_header.startswith("["):
+        return host_header[:host_header.find("]") + 1]
+    return host_header.rsplit(":", 1)[0]
+
+
+def install(app: FastAPI, cors_origins: tuple = (), launch_secret: str = "") -> None:
     allowed = set(cors_origins)
 
     @app.middleware("http")
     async def security(request: Request, call_next):
+        # Modo desktop: só o Electron que subiu este motor fala com ele. Outros programas e páginas da máquina (inclusive
+        # um site tentando alcançar 127.0.0.1) não têm o segredo; o Host fixo barra DNS rebinding.
+        if launch_secret:
+            host = _hostname(request.headers.get("host", ""))
+            if host not in LOCAL_HOSTS or not hmac.compare_digest(request.headers.get(LAUNCH_HEADER, ""), launch_secret):
+                return Response("Acesso negado.", status_code=403)
         # Mutação só de origem própria (defesa extra além de SameSite=Strict). Exceção: origens de apps nativos
         # que o operador listou, e SÓ sem cookie de sessão — sem credencial ambiente não há o que forjar (CSRF).
         if request.method in ("POST", "PUT", "DELETE", "PATCH"):

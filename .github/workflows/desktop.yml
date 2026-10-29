@@ -1,0 +1,65 @@
+# Instaladores do agente desktop: Windows (.exe), Linux (AppImage) e macOS (.dmg).
+# Cada sistema é construído no próprio runner (PyInstaller não faz cross-compile).
+# Assinatura: defina os segredos abaixo; sem eles o instalador sai SEM assinar (serve para testar, mas o Windows/macOS avisam o utilizador).
+#   Windows: WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD  (ou o serviço de assinatura em nuvem do seu certificado)
+#   macOS:   MAC_CSC_LINK / MAC_CSC_KEY_PASSWORD, APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID  (assinatura + notarização)
+name: desktop
+on:
+  workflow_dispatch:
+  push:
+    tags: ["desktop-v*"]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, target: win }
+          - { os: ubuntu-latest, target: linux }
+          - { os: macos-latest, target: mac }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.14" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "24" }
+      - uses: pnpm/action-setup@v4
+        with: { version: "12.3.4" }
+
+      - name: torch só CPU (instalador bem menor; o YOLOv8n roda bem em CPU)
+        if: matrix.target != 'mac'
+        run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -r requirements-desktop.txt
+      - name: Pesos do YOLO (vão dentro do instalador, sem download no 1º uso)
+        run: python -c "from ultralytics import YOLO; YOLO('yolov8n.pt'); YOLO('yolov8n-seg.pt')"
+
+      - name: Interface (Ionic/Angular)
+        shell: bash
+        run: |
+          WEB=$([ -d web ] && echo web || echo frontend)
+          pnpm --dir $WEB install --frozen-lockfile
+          pnpm --dir $WEB run build:desktop
+      - name: Motor (PyInstaller)
+        run: python desktop/engine/build_engine.py
+
+      - name: Casca (Electron) + instalador
+        working-directory: desktop
+        env:
+          CSC_LINK: ${{ matrix.target == 'win' && secrets.WIN_CSC_LINK || secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ matrix.target == 'win' && secrets.WIN_CSC_KEY_PASSWORD || secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run dist:${{ matrix.target }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: atendeio-${{ matrix.target }}
+          path: |
+            desktop/dist/*.exe
+            desktop/dist/*.AppImage
+            desktop/dist/*.dmg

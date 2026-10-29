@@ -10,6 +10,7 @@ from ..repositories.users import UserRepository
 from ..security import DUMMY_HASH, hash_password, new_token, token_digest, verify_password
 from .throttle import LoginThrottle
 
+LOCAL_USER = "local"   # dono único do agente desktop; ninguém entra nele por senha (a senha é aleatória e descartada)
 USERNAME_RE = re.compile(r"^[a-z0-9_.-]{3,32}$")
 
 
@@ -55,6 +56,15 @@ class AuthService:
             raise AuthError("Usuário ou senha incorretos.")
         self._throttle.reset(key)
         return username, self._open_session(row["id"])
+
+    def ensure_local_user(self) -> int:
+        """Dono local único do app desktop (sem login por senha: a senha é aleatória e descartada)."""
+        row = self._users.get_by_username(LOCAL_USER)
+        return row["id"] if row else self._users.create(LOCAL_USER, hash_password(new_token()))
+
+    def open_local_session(self) -> str:
+        """Sessão do dono local (modo desktop com servidor)."""
+        return self._open_session(self.ensure_local_user())
 
     def user_for_token(self, token: Optional[str]) -> Optional[dict]:
         """{"id","username"} da sessão válida, ou None."""
