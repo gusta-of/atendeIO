@@ -1,5 +1,7 @@
 # 4. Frontend (Ionic + Angular)
 
+> **Versão web (Ionic + Angular).** O produto atual é o **app nativo (Qt)**: veja [10-app-nativo.md](10-app-nativo.md). Este documento fica como referência da versão web até a limpeza final.
+
 ## Por que existe
 
 O painel original (`static/`, ~3 200 linhas de JS/HTML/CSS puro) funciona, mas cada tela é DOM imperativo, não tem navegação pensada para toque, não instala e não abre offline. O frontend novo em `frontend/` entrega:

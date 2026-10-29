@@ -14,6 +14,7 @@ from ..bridge import Bridge
 from ..core import AppCore
 from .camera_tile import CameraTile
 from .analytics_page import AnalyticsPage
+from .edit_camera_dialog import EditCameraDialog
 from .dialogs import AddLocalDialog, AddRtspDialog, ObjectsDialog, UnlockDialog
 from .icons import gear_icon
 from .logs_window import LogsWindow
@@ -184,6 +185,7 @@ class MainWindow(QMainWindow):
         tile.closed.connect(self._uncheck)
         tile.unlock_requested.connect(self.unlock_one)
         tile.objects_requested.connect(self.choose_objects)
+        tile.edit_requested.connect(self.edit_camera)
         tile.edit_zones_requested.connect(self.edit_zones)
         tile.logs_requested.connect(self.open_logs)
         self._tiles[cam_id] = tile
@@ -215,8 +217,21 @@ class MainWindow(QMainWindow):
             return
         cam_id = item.data(Qt.ItemDataRole.UserRole)
         menu = QMenu(self)
+        menu.addAction("Editar câmera…", lambda: self.edit_camera(cam_id))
         menu.addAction("Remover câmera", lambda: self.remove_camera(cam_id))
         menu.exec(self.list.mapToGlobal(pos))
+
+    def edit_camera(self, cam_id: int) -> None:
+        """Abre a edição da câmera; ao fechar, recarrega a lista e reabre o cartão com a configuração nova."""
+        dlg = EditCameraDialog(self.core, cam_id, self)
+        dlg.exec()
+        if not dlg.changed:
+            return
+        was_open = cam_id in self._tiles
+        self.close_tile(cam_id)
+        self.reload_cameras()
+        if was_open and not dlg.removed:
+            self._check(cam_id)
 
     def remove_camera(self, cam_id: int) -> None:
         if QMessageBox.question(self, "Remover câmera", "Remover esta câmera, suas áreas e o histórico dela?") \

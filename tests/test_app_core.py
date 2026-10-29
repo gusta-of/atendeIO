@@ -9,7 +9,7 @@ from dataclasses import replace
 import pytest
 
 from atendeio.app.core import AppCore
-from atendeio.errors import CredentialsRequired, NotFoundError
+from atendeio.errors import ConflictError, CredentialsRequired, NotFoundError, ValidationError
 from tests.conftest import FakeDetector
 
 PASSWORD = "S3nh@-Nativa-4471"
@@ -137,3 +137,63 @@ def test_a_monitored_camera_is_never_reaped(core, video_file):
     w.stop()
     time.sleep(1.0)                                                    # bem além do idle_ttl do teste (0,1 s)
     assert core.c.registry.get(cam) is not None                         # monitorada: continua de pé
+
+
+# ── editar câmera ───────────────────────────────────────────────────────────────────────────────
+def test_rename_a_local_camera_and_refuse_a_network_address_on_usb(core, video_file):
+    cam = core.add_local(str(video_file), "Antiga")["id"]
+    assert core.update_camera(cam, name="  Entrada   principal ")["name"] == "Entrada principal"     # limpa espaços
+    assert core.camera(cam)["name"] == "Entrada principal" and core.camera(cam)["ref"] == str(video_file)
+    with pytest.raises(ValidationError):
+        core.update_camera(cam, host="192.168.1.5")                                                  # USB não tem endereço
+    assert core.update_camera(cam, name="")["name"] == "Entrada principal"                            # vazio mantém o nome
+
+
+def test_edit_rtsp_address_keeps_credentials_in_memory_and_restarts_the_pipeline(core):
+    cam = core.add_rtsp("Caixa", "192.168.1.60", 554, "op", PASSWORD, "stream1")["id"]
+    out = core.update_camera(cam, name="Caixa 2", host="192.168.1.61", port=8554, path="live/main")
+    assert out["name"] == "Caixa 2" and out["ref"] == "rtsp://192.168.1.61:8554/live/main"
+    assert out["needs_credentials"] is False                                    # o endereço mudou, a senha digitada segue valendo
+    assert core.c.credentials.get(cam) == ("op", PASSWORD)
+    blob = b"".join(p.read_bytes() for p in core.settings.data_dir.rglob("*") if p.is_file())
+    assert PASSWORD.encode() not in blob                                        # e nada foi parar no disco
+
+
+def test_edit_rtsp_credentials_only_in_memory_and_blank_keeps_the_old_ones(core):
+    cam = core.add_rtsp("Caixa", "192.168.1.62", 554, "op", PASSWORD, "")["id"]
+    core.update_camera(cam, name="Caixa")                                       # nada de credencial: mantém
+    assert core.c.credentials.get(cam) == ("op", PASSWORD)
+    core.update_camera(cam, username="novo", password="Outra-Senha-9")
+    assert core.c.credentials.get(cam) == ("novo", "Outra-Senha-9")
+    blob = b"".join(p.read_bytes() for p in core.settings.data_dir.rglob("*") if p.is_file())
+    assert b"Outra-Senha-9" not in blob and PASSWORD.encode() not in blob
+
+
+def test_edit_rtsp_validation_and_conflicts(core):
+    a = core.add_rtsp("A", "192.168.1.70", 554, "u", "p", "s1")["id"]
+    core.add_rtsp("B", "192.168.1.71", 554, "u", "p", "s1")
+    with pytest.raises(ValidationError):
+        core.update_camera(a, host="127.0.0.1")                                 # loopback barrado (anti-SSRF)
+    with pytest.raises(ValidationError):
+        core.update_camera(a, port=70000)
+    with pytest.raises(ValidationError):
+        core.update_camera(a, host="host com espaço")
+    with pytest.raises(ConflictError):
+        core.update_camera(a, host="192.168.1.71")                              # já existe outra câmera nesse endereço
+    assert core.camera(a)["ref"] == "rtsp://192.168.1.70:554/s1"                # nada mudou nas falhas
+
+
+def test_editing_the_address_of_a_running_camera_closes_the_old_source(core, video_file):
+    cam = core.add_rtsp("Caixa", "192.168.1.80", 554, "u", "p", "s")["id"]
+    core.set_recognition(cam, True, [0])
+    core.set_monitor(cam, True)                                                 # fica de pé (tentando conectar)
+    assert wait(lambda: core.c.registry.get(cam) is not None)
+    old_hub = core.c.registry.get(cam)
+    core.update_camera(cam, host="192.168.1.81")
+    assert wait(lambda: core.c.registry.get(cam) is not old_hub)                 # o pipeline antigo foi parado e recriado
+    assert not old_hub.alive
+
+
+def test_edit_is_isolated_by_owner(core):
+    with pytest.raises(NotFoundError):
+        core.update_camera(9999, name="x")

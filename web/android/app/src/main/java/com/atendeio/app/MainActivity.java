@@ -1,4 +1,4 @@
-package br.com.atendeio.app;
+package com.atendeio.app;
 
 import com.getcapacitor.BridgeActivity;
 

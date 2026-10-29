@@ -374,3 +374,114 @@ def test_settings_scan_recommends_ranges_flags_values_above_them_and_applies(qap
     assert view.value() == dlg.rec.view[2] and mon.value() == dlg.rec.monitor[2]
     dlg.save()
     assert core.fps(cam)["view"] == dlg.rec.view[2]
+
+
+def test_every_camera_tile_has_an_edit_button_and_the_list_has_the_menu_entry(qapp, core, video_file, monkeypatch):
+    from atendeio.app.ui import main_window as mw
+
+    opened = []
+
+    class StubDialog:                          # o clique abriria a janela modal de verdade e prenderia o teste
+        changed = removed = False
+
+        def __init__(self, c, cam_id, parent=None):
+            opened.append(cam_id)
+
+        def exec(self):
+            return 0
+    monkeypatch.setattr(mw, "EditCameraDialog", StubDialog)
+    cam = core.add_local(str(video_file), "Entrada")["id"]
+    win = MainWindow(core, Bridge(), QIcon())
+    win.show()
+    win._check(cam)
+    tile = win._tiles[cam]
+    got = []
+    tile.edit_requested.connect(got.append)
+    assert not tile.edit_btn.icon().isNull() and "Editar" in tile.edit_btn.toolTip()
+    tile.edit_btn.click()
+    assert got == [cam] and opened == [cam]                                   # o cartão pede e a janela principal abre a edição
+    win.quit_app()
+
+
+def test_edit_dialog_prefills_saves_everything_and_reports_errors(qapp, core):
+    from atendeio.app.ui.edit_camera_dialog import EditCameraDialog
+
+    cam = core.add_rtsp("Caixa", "192.168.1.90", 554, "op", "Senha-Edit-77", "stream1")["id"]
+    core.set_recognition(cam, True, [0])
+    dlg = EditCameraDialog(core, cam)
+    assert dlg.name.text() == "Caixa" and dlg.host.text() == "192.168.1.90" and dlg.port.value() == 554
+    assert dlg.path.text() == "stream1" and dlg.recognize.isChecked() and "1 selecionado" in dlg.objects_btn.text()
+    assert dlg.fps_view.value() is None and dlg.user.text() == "" and dlg.password.text() == ""      # senha nunca é mostrada
+
+    dlg.name.setText("Caixa principal")
+    dlg.host.setText("192.168.1.91")
+    dlg.port.setValue(8554)
+    dlg.brand.setCurrentIndex(dlg.brand.findText("Hikvision"))
+    dlg.brand.activated.emit(dlg.brand.currentIndex())
+    assert dlg.path.text() == "Streaming/Channels/101"                                               # a marca preenche o caminho
+    dlg.fps_view.use_default.setChecked(False)
+    dlg.fps_view.spin.setValue(4)
+    dlg.monitor.setChecked(True)
+    dlg.mon_from.setText("11:00")
+    dlg.mon_to.setText("23:00")
+    dlg.save()
+    assert not dlg.error.text() and dlg.changed
+    cam_now = core.camera(cam)
+    assert cam_now["name"] == "Caixa principal" and cam_now["ref"] == "rtsp://192.168.1.91:8554/Streaming/Channels/101"
+    assert core.fps(cam)["view"] == 4.0
+    assert core.monitor(cam) == {"enabled": True, "from": "11:00", "to": "23:00", "person_ready": True}
+    assert core.c.credentials.get(cam) == ("op", "Senha-Edit-77")                                     # em branco: manteve
+
+    bad = EditCameraDialog(core, cam)
+    bad.host.setText("127.0.0.1")                                                                     # barrado (anti-SSRF)
+    bad.save()
+    assert "não permitido" in bad.error.text().lower() and core.camera(cam)["ref"].endswith("/Streaming/Channels/101")
+
+    late = EditCameraDialog(core, cam)
+    late.mon_from.setText("25:00")                                                                    # falha no último passo
+    late.mon_to.setText("23:00")
+    late.name.setText("Nome salvo antes do erro")
+    late.save()
+    assert "já foi salvo" in late.error.text() and core.camera(cam)["name"] == "Nome salvo antes do erro"
+
+
+def test_edit_dialog_for_usb_and_remove_flow(qapp, core, video_file, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from atendeio.app.ui.edit_camera_dialog import EditCameraDialog
+
+    cam = core.add_local(str(video_file), "USB")["id"]
+    dlg = EditCameraDialog(core, cam)
+    assert not hasattr(dlg, "host")                                         # USB: sem endereço de rede para editar
+    dlg.name.setText("Webcam da entrada")
+    dlg.save()
+    assert core.camera(cam)["name"] == "Webcam da entrada"
+
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes))
+    d2 = EditCameraDialog(core, cam)
+    d2._remove()
+    assert d2.removed and d2.changed and core.cameras() == []
+
+
+def test_main_window_reopens_the_tile_after_editing(qapp, core, video_file, monkeypatch):
+    from atendeio.app.ui import main_window as mw
+
+    cam = core.add_local(str(video_file), "Antes")["id"]
+    win = MainWindow(core, Bridge(), QIcon())
+    win.show()
+    win._check(cam)
+    assert "Antes" in win._tiles[cam].cam["name"]
+
+    class FakeDialog:
+        changed, removed = True, False
+
+        def __init__(self, c, cam_id, parent=None):
+            c.update_camera(cam_id, name="Depois")
+
+        def exec(self):
+            return 1
+    monkeypatch.setattr(mw, "EditCameraDialog", FakeDialog)
+    win.edit_camera(cam)
+    assert win._tiles[cam].cam["name"] == "Depois"                         # o cartão foi refeito com a configuração nova
+    assert "Depois" in win.list.item(0).text()
+    win.quit_app()

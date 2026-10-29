@@ -6,6 +6,21 @@ saída, fila) e acompanha, em tempo real, **mesa livre / ocupada / a limpar**, p
 de entradas e saídas e tamanho da fila. **Nenhuma imagem é gravada**; só números agregados de fluxo (pessoas ao mesmo tempo),
 se você ligar o monitoramento.
 
+> ## App desktop nativo (recomendado)
+> O atendeIO roda como **app desktop nativo** (Python + Qt): **um único processo, sem servidor local e sem webview**, na máquina do cliente.
+> O vídeo e as senhas das câmeras **não saem dela**. Credenciais RTSP ficam **só em memória** (pedidas a cada partida).
+>
+> ```bash
+> pip install -r requirements-app.txt
+> python -m atendeio.app          # abre maximizado; F11 alterna tela cheia
+> python scripts/recommend_fps.py # reconhece o hardware e recomenda o FPS das câmeras
+> ```
+>
+> Telas: câmeras ao vivo + Salão, **editar a configuração de cada câmera** (lápis), editor de áreas, logs, Análise de fluxo e
+> **Configurações** (engrenagem: FPS por câmera e recomendação pelo seu hardware).
+> Documentação: [`docs/`](docs/README.md) — [guia do utilizador](docs/11-guia-do-usuario.md), [referência técnica](docs/10-app-nativo.md),
+> [desenvolvimento](docs/12-desenvolvimento.md). As seções abaixo descrevem a **versão web/servidor**, ainda no repositório.
+
 **Regra central:** cada câmera tem um único dono. Nenhum utilizador vê, lista ou abre a câmera de outro.
 
 > Documentação de engenharia (visão geral, arquitetura, segurança, frontend, API, deploy, estado): veja [`docs/`](docs/README.md).

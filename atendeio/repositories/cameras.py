@@ -54,6 +54,15 @@ class CameraRepository:
             return c.execute("UPDATE cameras SET monitor=?, monitor_from=?, monitor_to=? WHERE id=? AND user_id=?",
                              (1 if enabled else 0, from_ or None, to or None, cam_id, user_id)).rowcount > 0
 
+    def update_basic(self, cam_id: int, user_id: int, name: str, ref: str) -> bool:
+        """Nome e endereço (`ref`, sem credenciais). Conflita com outra câmera do mesmo dono no mesmo endereço."""
+        try:
+            with closing(self._db.connect()) as c, c:
+                return c.execute("UPDATE cameras SET name=?, ref=? WHERE id=? AND user_id=?",
+                                 (name, ref, cam_id, user_id)).rowcount > 0
+        except sqlite3.IntegrityError:
+            raise ConflictError("Já existe uma câmera cadastrada nesse endereço.")
+
     def get_fps(self, cam_id: int) -> tuple:
         """(fps_view, fps_monitor) da câmera; None = usar o padrão do sistema. Sem filtro de dono: só o motor consulta."""
         with closing(self._db.connect()) as c:

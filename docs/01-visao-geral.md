@@ -1,5 +1,7 @@
 # 1. Visão geral
 
+> **Atual:** o produto é um **app desktop nativo** (Python + Qt) que roda na máquina do cliente. Veja [10-app-nativo.md](10-app-nativo.md) e o [guia do utilizador](11-guia-do-usuario.md).
+
 ## O que é
 
 Painel web multiutilizador que transforma as câmeras de um restaurante em informação de gestão. O utilizador cadastra uma

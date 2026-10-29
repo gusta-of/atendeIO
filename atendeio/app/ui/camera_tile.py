@@ -2,13 +2,14 @@
 
 import time
 
-from PySide6.QtCore import QTimer, Signal
+from PySide6.QtCore import QSize, QTimer, Signal
 from PySide6.QtWidgets import (QCheckBox, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout)
 
 from ...errors import CredentialsRequired, DomainError
 from ..bridge import Bridge
 from ..core import AppCore, Watch
 from .hall_panel import HallPanel
+from .icons import pencil_icon
 from .video_view import VideoView
 
 
@@ -18,6 +19,7 @@ class CameraTile(QFrame):
     objects_requested = Signal(int)
     edit_zones_requested = Signal(int)
     logs_requested = Signal(int)
+    edit_requested = Signal(int)
 
     def __init__(self, core: AppCore, bridge: Bridge, cam: dict, parent=None):
         super().__init__(parent)
@@ -34,6 +36,13 @@ class CameraTile(QFrame):
         title.setProperty("title", True)
         self._fps = QLabel("")
         self._fps.setProperty("muted", True)
+        edit = QPushButton()
+        edit.setIcon(pencil_icon())
+        edit.setIconSize(QSize(16, 16))
+        edit.setProperty("ghost", True)
+        edit.setToolTip("Editar a configuração desta câmera")
+        edit.clicked.connect(lambda: self.edit_requested.emit(self.cam_id))
+        self.edit_btn = edit
         close = QPushButton("✕")
         close.setProperty("ghost", True)
         close.setToolTip("Parar de assistir esta câmera")
@@ -41,6 +50,7 @@ class CameraTile(QFrame):
         head.addWidget(title)
         head.addStretch()
         head.addWidget(self._fps)
+        head.addWidget(edit)
         head.addWidget(close)
         root.addLayout(head)
 

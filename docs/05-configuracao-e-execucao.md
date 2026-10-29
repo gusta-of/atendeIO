@@ -1,5 +1,7 @@
 # 5. Configuração e execução
 
+> **Nota:** as variáveis `ATENDEIO_*` valem também no app nativo (`python -m atendeio.app`). Comandos de servidor/frontend são da versão web. Como rodar o app nativo: [10-app-nativo.md](10-app-nativo.md#2-como-rodar).
+
 ## Requisitos
 
 - Python 3.14 (versões fixadas em `requirements.txt`), Node 24+ e **pnpm** para o frontend.

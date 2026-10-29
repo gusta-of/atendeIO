@@ -1,48 +1,64 @@
 # Documentação do atendeIO
 
-Ponto de partida para qualquer pessoa ou agente que assuma o projeto. Leia na ordem; cada arquivo é curto e autocontido.
+Ponto de partida para qualquer pessoa ou agente que assuma o projeto.
 
-| # | Arquivo | Para quê |
-|---|---|---|
-| 1 | [01-visao-geral.md](01-visao-geral.md) | O que é, qual problema resolve, para quem, conceitos e princípios |
-| 2 | [02-arquitetura.md](02-arquitetura.md) | Camadas do backend, pipeline de visão, streaming, banco de dados |
-| 3 | [03-seguranca.md](03-seguranca.md) | Isolamento entre utilizadores, login (cookie e token), tíquetes, CSP, CORS |
-| 4 | [04-frontend.md](04-frontend.md) | App Ionic + Angular: estrutura, PWA, apps nativos, armadilhas |
-| 5 | [05-configuracao-e-execucao.md](05-configuracao-e-execucao.md) | Instalar, rodar, variáveis de ambiente, testes, builds |
-| 6 | [06-api.md](06-api.md) | Referência dos endpoints HTTP |
-| 7 | [07-deploy.md](07-deploy.md) | HTTPS, VPS, VPN com câmeras do restaurante, mini-PC local |
-| 8 | [08-estado-e-pendencias.md](08-estado-e-pendencias.md) | O que está pronto, o que não foi verificado, decisões, próximos passos |
+## O que é
 
-O `README.md` da raiz continua sendo a documentação de **uso** (funcionalidades vistas pelo utilizador). Esta pasta é a
-documentação **de engenharia**: como o sistema é construído e por quê.
+**atendeIO** transforma as câmeras de um restaurante em informação de gestão: vídeo ao vivo, reconhecimento de pessoas e objetos (YOLOv8n),
+**áreas desenhadas sobre o vídeo** (mesas, balcão, entrada, saída, fila), **mesa livre / ocupada / a limpar** em tempo real e **análise de fluxo**
+por hora e dia. **Nenhuma imagem é gravada**; só números agregados, e apenas com o monitoramento ligado.
+
+**Hoje o produto é um app desktop NATIVO** (Python + Qt): um único processo, interface nativa, **sem servidor local e sem webview**, que roda na
+máquina do cliente. O vídeo e as senhas das câmeras **não saem dela**. (A versão web/servidor continua no repositório até a paridade ser aceita.)
+
+## Por onde começar
+
+| Quero… | Leia |
+|---|---|
+| **Usar o app** | [11-guia-do-usuario.md](11-guia-do-usuario.md) |
+| **Entender como é construído** (arquitetura, módulos, threads, dados, segurança) | [10-app-nativo.md](10-app-nativo.md) |
+| **Mexer no código** (ambiente, testes, convenções, armadilhas, como acrescentar coisas) | [12-desenvolvimento.md](12-desenvolvimento.md) |
+| **Saber o que falta e as decisões** | [08-estado-e-pendencias.md](08-estado-e-pendencias.md) |
+| Entender o problema, os conceitos e os estados da mesa | [01-visao-geral.md](01-visao-geral.md) |
+
+## Índice completo
+
+| # | Arquivo | Vale para | Conteúdo |
+|---|---|---|---|
+| 1 | [01-visao-geral.md](01-visao-geral.md) | tudo | O que é, que problema resolve, princípios, glossário, estados da mesa |
+| 2 | [02-arquitetura.md](02-arquitetura.md) | motor (nativo **e** servidor) | Camadas, pipeline de visão, banco de dados. Partes de streaming/HTTP são da versão servidor |
+| 3 | [03-seguranca.md](03-seguranca.md) | versão servidor | Login, tíquetes, CSP, CORS. No nativo: [10, seção 9](10-app-nativo.md#9-segurança-e-privacidade) |
+| 4 | [04-frontend.md](04-frontend.md) | versão web | App Ionic + Angular, PWA |
+| 5 | [05-configuracao-e-execucao.md](05-configuracao-e-execucao.md) | motor | Variáveis `ATENDEIO_*` (valem também no nativo) e testes |
+| 6 | [06-api.md](06-api.md) | versão servidor | Endpoints HTTP (o app nativo **não** usa) |
+| 7 | [07-deploy.md](07-deploy.md) | versão servidor | HTTPS, VPS, VPN, mini-PC |
+| 8 | [08-estado-e-pendencias.md](08-estado-e-pendencias.md) | **atual** | Estado, decisões, pendências |
+| 9 | [09-desktop.md](09-desktop.md) | **obsoleto** | Desktop com Electron (substituído pelo nativo) |
+| 10 | [10-app-nativo.md](10-app-nativo.md) | **atual** | Referência técnica do app nativo |
+| 11 | [11-guia-do-usuario.md](11-guia-do-usuario.md) | **atual** | Manual do utilizador |
+| 12 | [12-desenvolvimento.md](12-desenvolvimento.md) | **atual** | Guia de desenvolvimento |
+
+> Os documentos 03, 04, 06 e 07 descrevem a **versão web/servidor** e ficam como referência até a limpeza final. Para o app nativo valem 10, 11 e 12.
 
 ## Resumo em 30 segundos
 
-- **atendeIO** é um painel multiutilizador de câmeras para restaurantes: vídeo ao vivo, reconhecimento de pessoas e objetos
-  (YOLOv8n), áreas desenhadas sobre o vídeo (mesas, balcão, entrada, saída, fila) e estatísticas de fluxo.
-- **Backend:** Python + FastAPI + SQLite + OpenCV + Ultralytics, **um processo só**.
-- **Frontend novo:** Ionic 9 + Angular 22 em `frontend/`, servido pelo mesmo servidor em `/app/`; PWA instalável e base para
-  apps Android/iOS (Capacitor). O painel antigo (`static/`, rota `/`) segue funcionando até o aceite da virada.
-- **Regra central:** cada câmera tem um único dono; ninguém vê a câmera de outro.
-- **Nenhuma imagem é gravada.** Só números agregados de fluxo, e apenas com o monitoramento ligado.
+- **App:** `python -m atendeio.app` (precisa de `pip install -r requirements-app.txt`). Abre maximizado; F11 alterna tela cheia.
+- **Princípios:** um processo, nenhuma porta aberta; credenciais RTSP **só em memória** (pedidas a cada partida); nenhuma imagem gravada;
+  cada câmera tem um único dono.
+- **Telas:** câmeras ao vivo + Salão, editor de áreas, logs, Análise de fluxo, **Configurações** (engrenagem: FPS por câmera e recomendação
+  pelo hardware) e **edição da configuração de cada câmera** (lápis).
+- **Stack:** Python 3.14 · PySide6 (Qt) · OpenCV · Ultralytics YOLOv8n · SQLite. Motor reaproveitado, sem HTTP.
+- **Identificador do app:** `com.atendeio.app` (internacional).
 
 ## Mapa do repositório
 
 ```
-app.py                  atalho para `python -m atendeio`
-atendeio/               backend (ver 02-arquitetura.md)
-  api/                  rotas, schemas, middleware, deps
-  analytics/            geometria, rastreador, mesas, fluxo (puro, testável)
-  services/             regras de negócio
-  repositories/         SQL
-  vision/               YOLO, inventário, fontes de vídeo
-  streaming/            hubs por câmera, MJPEG, SSE, escritor de fluxo
-  container.py          composition root
-  config.py             Settings (variáveis ATENDEIO_*)
-frontend/               app Ionic + Angular (ver 04-frontend.md)
-static/                 painel ANTIGO (JS/HTML/CSS puro), ainda servido em /
-scripts/                add_user.py, dev_demo.py, seed_flow.py
-deploy/                 Caddyfile.example
-tests/                  pytest (backend) + tests/js (matemática das formas do painel antigo)
+atendeio/app/           APP NATIVO (Qt): core, bridge, telas em ui/, lógica pura (shapes, zone_editor_model, log_events, charts/)
+atendeio/hardware.py    detecta hardware, mede o YOLO e recomenda FPS
+atendeio/               motor: analytics/ vision/ services/ repositories/ streaming/ db.py config.py resources.py
+atendeio/api/           servidor FastAPI (versão web; NÃO usado pelo app nativo)
+scripts/                recommend_fps.py (usar) · seed_flow.py, add_user.py, dev_demo.py (versão web/demonstração)
+tests/                  pytest: backend, motor e interface (offscreen)
+web/  desktop/  static/ versão web (Ionic), Electron e painel antigo — a remover depois do aceite da paridade
 docs/                   esta documentação
 ```

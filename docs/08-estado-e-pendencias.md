@@ -1,64 +1,69 @@
 # 8. Estado atual, decisões e pendências
 
-*Atualizado em 2026-10-27.*
+*Atualizado em 2026-10-29.*
 
-## Histórico em uma linha por marco
+## Linha do tempo
 
 1. `atendeIO mvp`: backend FastAPI + YOLO, painel antigo em `static/`, multiutilizador, áreas, mesas.
 2. `gera estatisticas`: monitoramento contínuo, histórico de fluxo, página de Análise.
-3. `Integração IONIC + Angular…`: novo frontend (`frontend/`), PWA, auth por token + tíquetes, Capacitor Android/iOS.
+3. Integração Ionic + Angular: frontend `web/` (antes `frontend/`), PWA, token + tíquetes, Capacitor.
+4. **Pivô para SaaS com agente no cliente:** o vídeo e as senhas das câmeras não podem ficar numa nuvem nossa; o cliente roda tudo, a nuvem (futura) só recebe metadados agregados.
+5. Desktop com Electron + motor HTTP local → **rejeitado** ("não é app web nem webview, nem serviço local").
+6. **App desktop nativo (Python + Qt)**: um processo, nenhuma porta aberta → **é o produto atual** ([10-app-nativo.md](10-app-nativo.md)).
+7. Paridade completa com a versão web + **Configurações (FPS por câmera + recomendação pelo hardware)** + **edição da configuração de cada câmera**.
 
-## O que está pronto
+## Pronto e verificado (Linux)
 
-- Backend completo com isolamento por dono, auth por cookie e por token, tíquetes de mídia, CORS por lista, serving da SPA em `/app/`.
-- App Ionic + Angular com paridade funcional: login/cadastro, câmeras ao vivo, Salão, Objetos, editor de áreas, Logs, Análise (com CSV).
-- PWA: manifest, ícones, service worker só da casca, faixa offline, instalar/atualizar.
-- Projetos nativos `android/` e `ios/` sincronizados; tela de endereço do servidor; token em `@capacitor/preferences`.
-- Verificado (última rodada): pytest 200, Vitest 55, node 14, lint limpo, builds `web` e `native` sem warnings, service worker em Chrome real (controla a página, cache só da casca, casca abre com o servidor desligado) e a API de token/tíquete/CORS contra o uvicorn real.
+- Núcleo em processo (`AppCore`), vídeo ao vivo sem HTTP nem JPEG, Salão, Reconhecer/Monitorar, Áreas/Caixas.
+- Cadastro/edição/remoção de câmera RTSP e USB; **credenciais RTSP só em memória** (nada em disco, testado por varredura de bytes).
+- Editor de áreas, janela de logs, Análise de fluxo (com CSV), escolha de objetos.
+- Configurações: FPS por câmera (ao assistir / monitorando) aplicado ao vivo; reconhecimento do hardware e recomendação por medição real do YOLO; script `scripts/recommend_fps.py`.
+- Câmera ociosa é liberada (coletor); encerramento limpo por bandeja, `Ctrl+C` e `SIGTERM`; instância única; tela cheia (F11), abre maximizado.
+- Verificado: nenhuma porta de escuta nem conexão de rede do processo; webcam real + YOLO real; testes de interface com mouse real (offscreen).
+- Testes: **350 passando** (`python -m pytest -q`, ~2 min); detalhes em [12-desenvolvimento.md](12-desenvolvimento.md#testes).
 
-## Não verificado (limites do ambiente de desenvolvimento)
+## Não verificado
 
-- Instalação em celular/tablet reais.
-- Build de APK/IPA (sem Android SDK/Xcode neste ambiente).
-- HTTPS na LAN (certificado interno do Caddy no celular).
-- Cliente nativo ponta a ponta (só testes unitários + build + API via curl).
-- Token nativo fica em `@capacitor/preferences`, **não** em Keychain/Keystore.
-- Correção do editor de áreas (vídeo por baixo do painel lateral, `fit()` com padding) compilou, mas **não foi reconferida no navegador** depois do ajuste.
+- **Windows e macOS** (câmera, instalador, assinatura, caminhos de dados, bandeja): só há Linux no ambiente de desenvolvimento.
+- **PC real de 4 GB**: a meta de memória (~1 GB hoje, com `torch`) ainda não cabe com folga.
+- Recomendação de FPS em máquina fraca (só medida num Ryzen 5 9600X).
+- Benchmark usa imagem sintética; com cenas movimentadas o tempo real pode ser um pouco maior.
 
 ## Decisões importantes e o porquê
 
 | Decisão | Motivo |
 |---|---|
-| Ionic + Angular (não React/Vue) | Escolha do utilizador; Ionic dá PWA + Capacitor com um código só. |
-| Servir o app em `/app/` pelo próprio FastAPI | Um servidor só, mesma origem no web (cookie funciona, sem CORS). |
-| Estratégia "figueira" (painel antigo em `/` até o aceite) | Evita big-bang; plano de volta por um release. |
-| Offline só da casca | Nenhum dado autenticado em cache de service worker. |
-| Token só para nativo; web fica em cookie `HttpOnly` | Token nunca chega ao JS do web. |
-| Tíquete de 60 s para vídeo/eventos | `<img>`/`EventSource` não enviam cabeçalhos. |
-| pnpm, não npm | Pedido do utilizador; `cli.packageManager: pnpm` no `angular.json`. |
-| `max_fps` 15 → 5 | Alteração sua, ainda só *staged* em `atendeio/config.py`; motivo não registrado (provavelmente custo de CPU). Confirme antes de depender disso. |
-| Anti-SSRF permite redes privadas | Câmeras de restaurante ficam em `192.168.x.x`; implica o limite de multi-restaurante acima. |
+| App nativo Python + Qt (não Electron/Tauri/Flutter/.NET) | Pedido do utilizador: sem servidor local nem webview; reaproveita o motor Python testado; menos memória que o Electron. |
+| Um processo, sem porta | Segurança e simplicidade: nada para atacar localmente. Trava de instância por arquivo (`QLockFile`), não por socket. |
+| Credenciais RTSP só em memória | Requisito do utilizador: nunca persistir usuário/senha do cliente. |
+| Gráficos com `QPainter`, não `QtCharts` | `QtCharts` é GPL/comercial. |
+| `opencv-python-headless` + `PySide6-Essentials` | O `opencv-python` quebra o Qt; Addons é GPL. |
+| FPS por câmera (NULL = padrão) | Cada câmera/computador tem um limite diferente; "padrão" mantém o comportamento antigo. |
+| Recomendação por **medição**, não por tabela | Núcleos/GHz não dizem a velocidade real do YOLO; medir é barato e preciso. |
+| Identificador `com.atendeio.app` | Internacional (o utilizador não está no Brasil); trocar por domínio próprio antes de publicar em loja. |
+| Bloqueio por plano: valor real no servidor | Software na máquina do cliente é contornável; Análise, histórico e ingest só existem com conta paga. |
 
-## Pendências
+## Pendências (ordem sugerida)
 
-1. **Fase 5 (virada):** apontar `/` para o app novo; remover `static/` e as rotas `/login`, `/analytics`; um release de convivência. **Só depois do aceite da paridade pelo utilizador.**
-2. Processo `scripts/dev_demo.py` (pid 254781) pode estar rodando solto na máquina de desenvolvimento; encerrar com `kill 254781` e reiniciar `pnpm start` (o `node_modules` foi reinstalado).
-3. Reconferir o editor de áreas no navegador (item acima).
-4. Testar instalação PWA em celular real, atrás de HTTPS.
-5. Gerar APK/IPA em máquina com Android Studio/Xcode; avaliar Keychain/Keystore para o token.
-6. Se for vender para **vários restaurantes**: isolamento de rede por cliente (ver 07-deploy.md), possivelmente organização/loja como entidade (hoje só existe `users`), e revisão de limites por conta.
-7. Alterar `atendeio/config.py` (`max_fps` 5) está *staged* e sem commit.
+1. **Detector ONNX** (`vision/detector.py`): tirar o `torch`; instalador e memória bem menores; necessário para máquinas de 4 GB.
+2. **Câmera USB no Windows/macOS**: `vision/sources.py` só enumera V4L2 (usar `cv2_enumerate_cameras` por plataforma). Câmeras RTSP já devem funcionar nos três.
+3. **Fuso padrão**: `config.py` ainda usa `America/Sao_Paulo`; passar a usar o fuso do computador (ou pedir na primeira abertura).
+4. **Iniciar com o computador** (Windows: chave `Run`; macOS: Login Item; Linux: `.desktop`) e item na bandeja.
+5. **Empacotar e assinar**: PyInstaller por sistema + instalador (Windows `.exe` com Inno Setup/`signtool`; macOS `.dmg` com notarização; Linux AppImage); CI em matriz. Certificados são compra sua.
+6. **SaaS:** `LicenseService` (token Ed25519, relógio atrasado, carência), `UploadWorker` (marca-d'água sobre `flow_*`, lotes idempotentes), `cloud/` (FastAPI + Postgres, RLS por organização), `BillingProvider` abstrato, tela de conta e de bloqueio nativas.
+7. **Limpeza (só com a sua confirmação):** apagar `web/`, `desktop/`, `static/`, `atendeio/api/`, o modo servidor e os testes dessa camada; o histórico fica no git.
+8. Se for vender para **vários restaurantes**: modelo de organização/loja e isolamento de rede por cliente.
 
 ## Ideias fora do escopo atual
 
-Notificações push; modo offline com dados ao vivo; i18n além de pt-BR; publicação real nas lojas; modelo treinado com fotos do salão para distinguir prato sujo de limpo; GPU para escalar câmeras assistidas.
+Notificações push; GPU; i18n além do português; modelo treinado com fotos do salão para distinguir prato sujo de limpo; painel web para o dono ver pelo celular (leria da nuvem).
 
 ## Como contribuir (agentes)
 
-1. Leia `docs/README.md` e o arquivo do tópico que vai tocar.
-2. Mantenha as camadas (`api → services → repositories`) e o isolamento por dono; escreva o teste junto.
-3. Rode `python -m pytest`, `node --test tests/js/shapes.test.js` e, no frontend, `pnpm test && pnpm run lint && pnpm run build:web && pnpm run build:native`.
-4. Não grave imagens, não registre credenciais RTSP em log, não amplie o que o cookie expõe ao JS.
-5. Use `.venv/bin/python` (o `python3` do sistema não tem cv2) e **pnpm** (não npm).
-6. Não faça a Fase 5 sem autorização explícita do utilizador.
+1. Leia [README](README.md), [10-app-nativo.md](10-app-nativo.md) e [12-desenvolvimento.md](12-desenvolvimento.md).
+2. Lógica em módulo puro com teste; widget fino; **teste com dados de verdade** (câmera de arquivo, `FakeDetector`, histórico sintético).
+3. Rode `python -m pytest -q` antes de entregar; para a interface, `tests/test_app_ui.py` (offscreen).
+4. Não grave imagens; não persista nem registre credenciais RTSP; não abra portas; não use `QtCharts`/`opencv-python`.
+5. Use `.venv/bin/python`. Cuidado com `pkill -f`/`pgrep -f` com padrão que casa a própria linha de comando.
+6. Não apague código web/Electron sem autorização explícita.
 7. Atualize esta pasta quando mudar algo que ela descreve.

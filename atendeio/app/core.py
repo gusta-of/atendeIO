@@ -108,6 +108,22 @@ class AppCore:
         self.c.cameras.delete(cam_id, self.user_id)
         self.c.registry.stop_camera(cam_id)
 
+    def update_camera(self, cam_id: int, name: Optional[str] = None, host: Optional[str] = None, port=None,
+                      path: Optional[str] = None, username: Optional[str] = None, password: Optional[str] = None) -> dict:
+        """Edita a câmera: nome, endereço (rede) e, se informados, usuário/senha (só memória). Se o endereço ou as credenciais
+        mudaram, o pipeline é reiniciado para reabrir a fonte com os dados novos."""
+        before = self.c.cameras.get_owned(cam_id, self.user_id)["ref"]
+        cam = self.c.cameras.update(cam_id, self.user_id, name, host, port, path)
+        changed = cam["ref"] != before
+        if cam["kind"] == "rtsp" and (username or password):
+            self.c.cameras.set_credentials(cam_id, self.user_id, username or "", password or "")
+            changed = True
+            cam = self.c.cameras.update(cam_id, self.user_id)            # visão atualizada (needs_credentials)
+        if changed:
+            self.c.registry.stop_camera(cam_id)                         # a fonte antiga ainda estava aberta: reabre com a nova
+            self.c.scheduler.tick()                                     # câmera monitorada volta sozinha
+        return cam
+
     def set_credentials(self, cam_id: int, username: str, password: str) -> dict:
         """Usuário e senha da câmera RTSP (só memória). Câmera monitorada volta a ser analisada já."""
         cam = self.c.cameras.set_credentials(cam_id, self.user_id, username, password)

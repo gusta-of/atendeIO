@@ -19,7 +19,7 @@
     "electron-builder": "^26.0.0"
   },
   "build": {
-    "appId": "br.com.atendeio.desktop",
+    "appId": "com.atendeio.desktop",
     "productName": "atendeIO",
     "directories": { "output": "dist" },
     "files": ["main.js", "assets/**", "package.json"],

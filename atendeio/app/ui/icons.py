@@ -32,3 +32,29 @@ def gear_icon(color: str = "#cbd5e1", size: int = 64, teeth: int = 8) -> QIcon:
     p.drawPath(shape)
     p.end()
     return QIcon(pm)
+
+
+def pencil_icon(color: str = "#cbd5e1", size: int = 64) -> QIcon:
+    """Lápis na diagonal (editar)."""
+    pm = QPixmap(size, size)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.translate(size / 2, size / 2)
+    p.rotate(45)
+    w, h = size * 0.20, size * 0.86
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QBrush(QColor(color)))
+    body = QPainterPath()
+    body.addRoundedRect(-w / 2, -h / 2, w, h * 0.70, w * 0.18, w * 0.18)           # corpo (com a borracha na ponta de cima)
+    tip = QPainterPath()
+    tip.moveTo(-w / 2, h * 0.24)                                                    # ponta
+    tip.lineTo(w / 2, h * 0.24)
+    tip.lineTo(0, h / 2)
+    tip.closeSubpath()
+    p.drawPath(body)
+    p.drawPath(tip)
+    p.setBrush(QBrush(QColor(0, 0, 0, 90)))                                          # faixa escura separando a borracha
+    p.drawRect(-w / 2, -h / 2 + h * 0.12, w, h * 0.04)
+    p.end()
+    return QIcon(pm)

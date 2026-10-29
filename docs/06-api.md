@@ -1,5 +1,7 @@
 # 6. API HTTP
 
+> **Versão servidor.** O **app nativo não usa HTTP**: ele chama o motor direto (`AppCore`). Esta API só existe no servidor FastAPI (`atendeio/api/`).
+
 Todas as rotas `/api/*` exigem sessão (cookie `atendeio_session` **ou** `Authorization: Bearer <token>`), exceto as marcadas como públicas. Câmera de outro utilizador responde **404**. Respostas em `/api/` levam `Cache-Control: no-store`. A documentação interativa do FastAPI (`/docs`, `/redoc`, `/openapi.json`) está **desabilitada de propósito** (`api/app.py`); os schemas estão em `atendeio/api/schemas.py`. Esta página dá o mapa.
 
 ## Auth (`/api/auth`)

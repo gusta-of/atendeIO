@@ -1,5 +1,7 @@
 # 2. Arquitetura
 
+> **Nota:** as camadas `analytics/`, `vision/`, `services/`, `repositories/` e o pipeline de visão valem para o **app nativo**. As partes de streaming HTTP (MJPEG/SSE), servir frontend e `api/` são da versão servidor. Arquitetura do app nativo: [10-app-nativo.md](10-app-nativo.md).
+
 ## Stack
 
 - Python (testado com 3.14), **FastAPI** + **uvicorn**, **SQLite** (WAL), **OpenCV**, **Ultralytics YOLOv8n** (detecção) e `yolov8n-seg` (segmentação, opcional), `cryptography` (Fernet).

@@ -1,5 +1,7 @@
 # 3. Segurança
 
+> **Versão web/servidor.** Descreve login por cookie/token, tíquetes, CSP e CORS do servidor FastAPI. O **app nativo** não tem servidor nem login por senha: veja a seção de segurança em [10-app-nativo.md](10-app-nativo.md#9-segurança-e-privacidade). O isolamento por dono e o anti-SSRF continuam valendo.
+
 ## Isolamento entre utilizadores
 
 - `CameraService.get_owned` devolve `NotFound` tanto para câmera inexistente quanto para a de outro utilizador: **404 indistinguível**.

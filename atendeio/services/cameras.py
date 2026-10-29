@@ -94,6 +94,23 @@ class CameraService:
         cam_id = self._cameras.add(user_id, name, "local", dev["ref"])
         return self._public({"id": cam_id, "name": name, "kind": "local", "ref": dev["ref"]})
 
+    def update(self, cam_id: int, user_id: int, name: Optional[str] = None, host: Optional[str] = None, port=None,
+               path: Optional[str] = None) -> dict:
+        """Edita nome e, nas câmeras de rede, o endereço (IP/porta/caminho). Câmera USB só muda de nome: a `ref` é o
+        id de hardware. Devolve a câmera já atualizada (visão pública). Usuário e senha não passam por aqui."""
+        cam = self.get_owned(cam_id, user_id)
+        new_name = _clean_name(name, cam["name"]) if name is not None else cam["name"]
+        ref = cam["ref"]
+        if cam["kind"] == "rtsp" and (host is not None or port is not None or path is not None):
+            old_host, old_port, old_path = rtsp.parse_ref(cam["ref"])
+            h, p, pa = rtsp.validate(host if host is not None else old_host, port if port not in (None, "") else old_port,
+                                     path if path is not None else old_path)
+            ref = rtsp.public_ref(h, p, pa)
+        elif cam["kind"] == "local" and (host or port or path):
+            raise ValidationError("Câmera USB não tem endereço de rede para editar.")
+        self._cameras.update_basic(cam_id, user_id, new_name, ref)
+        return self._public(self.get_owned(cam_id, user_id))
+
     def delete(self, cam_id: int, user_id: int) -> None:
         if not self._cameras.delete(cam_id, user_id):
             raise NotFoundError("Câmera não encontrada.")

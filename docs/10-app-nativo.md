@@ -1,87 +1,226 @@
-# 10. App desktop nativo (Python + Qt)
+# 10. App desktop nativo (Python + Qt) — referência técnica
 
-**Substitui o desktop com Electron (`09-desktop.md`, obsoleto).** O Electron era um app web dentro de uma janela, com um servidor
-HTTP local. O app nativo é **um único processo, interface Qt, nenhuma porta aberta**: câmeras, YOLO e interface rodam juntos.
+**Substitui o desktop com Electron (`09-desktop.md`, obsoleto).** O Electron era um app web dentro de uma janela, com um
+servidor HTTP local. O app nativo é **um único processo, interface Qt, nenhuma porta aberta**: câmeras, YOLO e interface rodam
+juntos, na máquina do cliente. Vídeo e credenciais RTSP **não saem dela**.
 
-```
-atendeio/app/     main.py (entrada) · core.py (AppCore) · bridge.py (threads -> sinais Qt) · labels.py · theme.py · ui/
-atendeio/         analytics/ vision/ services/ repositories/ streaming/  <- motor reaproveitado, sem HTTP
-```
+> Para usar o app, veja o [guia do utilizador](11-guia-do-usuario.md). Para mexer no código, o
+> [guia de desenvolvimento](12-desenvolvimento.md). O que falta fazer está em [08-estado-e-pendencias.md](08-estado-e-pendencias.md).
 
-## Rodar
+## 1. Princípios
+
+| Princípio | O que garante |
+|---|---|
+| **Um processo, sem servidor local** | Nenhuma porta de escuta, nenhum socket de escuta. Verificável: `ss -ltnp` não lista o processo. Há teste que falha se o núcleo importar `fastapi`/`uvicorn`. |
+| **Interface nativa** | Widgets Qt (PySide6), sem webview, sem Electron, sem navegador embutido. |
+| **Credenciais RTSP só em memória** | Usuário e senha nunca vão para o disco nem para a nuvem; são pedidos de novo a cada partida. IP, porta e caminho persistem. |
+| **Nenhuma imagem é gravada** | Só números agregados de fluxo, e apenas com o monitoramento ligado. |
+| **Lógica separada do desenho** | Editor de áreas, logs, gráficos e FPS têm o modelo em módulo puro (sem Qt), testado direto. O Qt só desenha e traduz mouse/teclado. |
+| **Nada pesa a aplicação** | Leitura e inferência em threads próprias, só o quadro mais recente, câmera ociosa é liberada, FPS configurável por câmera. |
+
+## 2. Como rodar
 
 ```bash
 pip install -r requirements-app.txt
-python -m atendeio.app          # abre a janela
+python -m atendeio.app            # abre a janela (maximizada)
+python -m atendeio.app --hidden   # inicia sem janela, só motor e bandeja
 ```
 
-Dados em `~/.local/share/atendeIO/data` (Linux); `ATENDEIO_DATA` troca. Uma instância por computador (arquivo de trava, sem
-socket). Verificação: `ss -ltnp` não mostra nenhuma escuta do processo.
+Variáveis `ATENDEIO_*` (ver [05](05-configuracao-e-execucao.md)) continuam valendo: `ATENDEIO_DATA` troca a pasta de dados;
+`ATENDEIO_MAX_FPS`, `ATENDEIO_MONITOR_FPS`, `ATENDEIO_TIMEZONE`, `ATENDEIO_MAX_CAMERAS`, `ATENDEIO_OCCLUSION`, etc.
 
-## Como funciona
-- **`AppCore`** monta o mesmo `Container` do servidor (serviços, hubs, escritor de fluxo) e expõe métodos para a interface. O dono é
-  fixo (`local`), sem login por senha. **Não importa nenhum servidor web** (há teste para isso).
-- **Vídeo sem HTTP nem JPEG:** `CameraHub.subscribe_frames(callback)` entrega o quadro BGR já desenhado (áreas, caixas) à interface;
-  a `Bridge` o converte em `QImage` e emite um sinal Qt. Sem espectador web, o hub nem codifica JPEG.
-- **Só assiste quando visível:** janela oculta/minimizada = a interface solta o espectador e só o monitor (1 fps) segue.
-- **Credenciais RTSP** só em memória (`services/credentials.py`); a janela "Desbloquear câmeras" pede na partida e a senha nunca vai
-  para o disco (testado por varredura de bytes).
-- **Bandeja:** Windows/macOS fecham para a bandeja (o fluxo continua sendo medido); Linux encerra ao fechar.
+## 3. Mapa do código
 
-## Paridade com a versão web (estado)
+```
+atendeio/
+  app/                          ── app nativo (Qt) ──────────────────────────────────────────
+    __main__.py                 entrada `python -m atendeio.app`; higieniza variáveis de terminais em snap
+    main.py                     QApplication, trava de instância, AppCore, janela, sinais (Ctrl+C/SIGTERM)
+    core.py                     AppCore: o motor em processo, sem HTTP (todas as operações que a interface usa)
+    bridge.py                   thread do pipeline → sinal Qt (quadro BGR → QImage)
+    theme.py                    tema escuro (QSS)
+    labels.py, format.py        rótulos/cores do Salão e formatação pt-BR (porta de area-labels.ts / format.ts)
+    shapes.py                   matemática das formas (porta de shapes.ts)
+    zone_editor_model.py        lógica do editor de áreas (sem Qt)
+    log_events.py               buffer da janela de logs: filtro, busca, anel, NDJSON (sem Qt)
+    charts/models.py            geometria dos gráficos da Análise (porta de chart-models.ts)
+    ui/
+      main_window.py            janela principal, barra lateral, bandeja, F11
+      camera_tile.py            cartão da câmera: vídeo + chaves + botões
+      video_view.py             pinta o quadro (proporção da câmera, altura acompanha a largura)
+      hall_panel.py             painel do Salão (mesas, pessoas, objetos)
+      dialogs.py                adicionar câmera (RTSP/USB), desbloquear câmeras, escolher objetos
+      edit_camera_dialog.py     editar a configuração de UMA câmera (nome, endereço, FPS, monitor, remover)
+      settings_dialog.py        Configurações: FPS por câmera + reconhecimento do hardware
+      zone_editor.py            editor de áreas (QPainter + mouse)
+      logs_window.py            janela de logs (lista virtualizada)
+      analytics_page.py         Análise de fluxo (filtros, KPIs, cartões de gráfico, CSV)
+      charts.py                 gráficos desenhados com QPainter
+      icons.py                  engrenagem e lápis desenhados em código
+  hardware.py                   detecta o hardware, mede o YOLO e recomenda FPS (sem Qt)
+  resources.py                  RAM, perfil econômico, `pid_alive`
+  services/credentials.py       SessionCredentials: usuário/senha RTSP só em memória
+  analytics/ vision/ services/ repositories/ streaming/ db.py   motor reaproveitado, sem HTTP
+scripts/recommend_fps.py        recomendação de FPS pela linha de comando
+```
 
-| Função | Web (Ionic) | Nativo (Qt) |
+O motor (`analytics`, `vision`, `services`, `repositories`, `streaming`) é o mesmo do servidor e **não importa nada de HTTP**.
+A camada `atendeio/api/` (FastAPI) e `static/`, `web/`, `desktop/` pertencem à versão web/servidor e **não são usadas** pelo app nativo.
+
+## 4. Arquitetura
+
+```
+ UI (thread principal Qt)  ──chama──►  AppCore  ──►  serviços / repositórios / SQLite
+        ▲                                 │
+        │ sinais Qt (fila)                └──►  HubRegistry ─► CameraHub (1 por câmera)
+        │                                                     ├─ thread de leitura (OpenCV)
+     Bridge  ◄── callback(quadro, estado) ◄───────────────────┤─ thread de inferência (YOLO + áreas + mesas)
+                                                              └─ FlowAggregator ─► FlowWriter (thread única, grava o histórico)
+```
+
+### 4.1 Caminho do vídeo (sem HTTP, sem JPEG)
+1. A thread de leitura do `CameraHub` guarda só o **quadro mais recente**.
+2. A de inferência roda o YOLO, o rastreador e a máquina de estados das mesas e desenha áreas/caixas (`vision/draw.py`, `areas_draw.py`).
+3. `CameraHub.subscribe_frames(callback, boxes, areas)` entrega o **quadro BGR já desenhado** + o estado ao callback. Sem espectador web, o hub **nem codifica JPEG**.
+4. A `Bridge` converte para `QImage` (com cópia própria) e emite um sinal; a `VideoView` pinta.
+5. **Só assiste quando visível:** janela oculta/minimizada = a interface solta o espectador e só o monitor (FPS de monitoramento) segue trabalhando.
+
+### 4.2 Threads
+| Thread | Função |
+|---|---|
+| principal (Qt) | toda a interface |
+| `camN-read` / `camN-infer` | leitura e inferência de cada câmera ligada |
+| `flow-writer` | única que grava o histórico no SQLite (fila limitada; se o disco travar, descarta o mais antigo) |
+| `monitor` | `MonitorScheduler`: mantém de pé as câmeras monitoradas (a cada 30 s) |
+| `reaper` | **libera a câmera ociosa** (ninguém assiste nem monitora): fecha o dispositivo e devolve a webcam ao sistema |
+| `model-warmup` | carrega o YOLO na partida |
+| `hardware-scan` | mede o hardware sem travar a janela (só enquanto roda) |
+
+### 4.3 Ciclo de vida e encerramento
+- **Instância única** por `QLockFile` (arquivo de trava; **não** `QLocalServer`, para não abrir endpoint nenhum). A segunda abertura avisa e sai.
+- Fechar a janela: **Windows/macOS** → vai para a bandeja (o monitoramento continua); **Linux** → encerra (muitos ambientes não têm bandeja).
+- **Encerramento limpo** por "Sair" na bandeja, `Ctrl+C` ou `SIGTERM`: o monitor solta os hubs, cada hub entrega o histórico, o escritor grava e o cofre de credenciais é esquecido.
+- **F11** alterna tela cheia de verdade; a janela abre **maximizada**.
+
+## 5. Telas e funções (paridade com a versão web)
+
+| Função | Onde |
+|---|---|
+| Vídeo ao vivo, Reconhecer, Monitorar, Áreas/Caixas | `camera_tile.py` |
+| Salão: mesas livre/ocupada/a limpar, "Limpa", pessoas por área, objetos | `hall_panel.py` |
+| Adicionar câmera RTSP/USB, remover | `dialogs.py`, menu da lista |
+| **Editar a configuração de cada câmera** (lápis no cartão ou menu "Editar câmera…") | `edit_camera_dialog.py` |
+| Objetos (80 classes, grupos, busca, atalho Restaurante) | `ObjectsDialog` |
+| Editor de áreas (retângulo, quadrado, círculo, triângulo, polígono; mover, redimensionar, girar, sombra de assentos) | `zone_editor.py` + `zone_editor_model.py` |
+| Logs em tempo real (filtro, busca, pausa, quadros, copiar, NDJSON) | `logs_window.py` + `log_events.py` |
+| Análise de fluxo (KPIs, insights, hora, mapa de calor, dia a dia, curva do dia, áreas, tabela, CSV) | `analytics_page.py` + `charts.py` + `charts/models.py` |
+| Monitoramento com horário de funcionamento | Análise e edição da câmera |
+| Configurações: FPS por câmera + hardware | engrenagem → `settings_dialog.py` |
+| Credenciais RTSP sob demanda | `UnlockDialog` |
+| Login/cadastro por senha | **n/a** (dono local único; a conta virá com a nuvem) |
+| PWA, instalar, offline, tela de servidor | **n/a** (é um app nativo) |
+
+**Atalhos do editor de áreas:** `V` selecionar · `R` retângulo · `Q` quadrado · `C` círculo · `T` triângulo · `P` polígono ·
+`Esc` cancela/desmarca/fecha · `Enter` fecha o polígono · `Backspace` apaga o último ponto · `Delete` exclui a área ·
+`[` `]` giram 5° (com Shift, 15°) · Shift ao arrastar canto mantém a proporção; Shift ao girar trava em 15°.
+
+## 6. Editar a configuração de uma câmera
+
+`EditCameraDialog` reúne tudo de uma câmera num lugar só:
+
+| Seção | Campos | Observação |
 |---|---|---|
-| Vídeo ao vivo, Reconhecer, Monitorar, Áreas/Caixas | ✓ | ✓ `ui/camera_tile.py` |
-| Salão: mesas livre/ocupada/a limpar, "Limpa", pessoas por área, objetos | ✓ | ✓ `ui/hall_panel.py` |
-| Adicionar câmera RTSP/USB, remover | ✓ | ✓ `ui/dialogs.py` |
-| Objetos (80 classes, grupos, busca, atalho Restaurante) | ✓ | ✓ `ObjectsDialog` |
-| Editor de áreas (formas, mover, redimensionar, girar, sombra de assentos, teclas) | ✓ | ✓ `ui/zone_editor.py` + `zone_editor_model.py` (lógica testada sem tela) |
-| Logs em tempo real (filtro, busca, pausa, quadros, copiar, NDJSON) | ✓ | ✓ `ui/logs_window.py` + `log_events.py` |
-| Análise de fluxo (KPIs, insights, hora, mapa de calor, dia a dia, curva do dia, áreas, tabela, CSV) | ✓ | ✓ `ui/analytics_page.py` + `ui/charts.py` + `charts/models.py` |
-| Monitoramento com horário de funcionamento | ✓ | ✓ (na Análise) |
-| Credenciais RTSP sob demanda (não persistem) | n/a | ✓ `UnlockDialog` |
-| Configurações: FPS por câmera + recomendação pelo hardware (engrenagem) | n/a | ✓ `ui/settings_dialog.py` + `hardware.py` |
-| Login/cadastro por senha | ✓ | n/a (dono local único; a conta virá com a nuvem) |
-| PWA, instalar, offline, tela de servidor | ✓ | n/a (é um app nativo) |
+| Geral | Nome; **RTSP:** marca (preenche o caminho), endereço, porta, caminho, usuário, senha; **USB:** dispositivo (só leitura) | Usuário/senha em branco **mantêm** os atuais; preenchidos, ficam só na memória. Câmera USB só muda de nome. |
+| Reconhecimento | chave Reconhecer; botão para escolher objetos | escolher objetos grava na hora |
+| Desempenho | FPS ao assistir e monitorando (ou "padrão") | vale na hora |
+| Monitoramento | chave + horário de funcionamento | exige reconhecimento ligado e "Pessoa" marcada |
+| Remover | remove câmera, áreas e histórico | pede confirmação |
 
-Portas de código web: `shapes.ts`→`app/shapes.py`, `chart-models.ts`→`app/charts/models.py`, `format.ts`→`app/format.py`,
-`area-labels.ts`→`app/labels.py`, `log-event.ts`→`app/log_events.py`. Os testes dos `.spec.ts` foram portados para pytest.
+Gravação em ordem (câmera → reconhecimento → FPS → monitoramento). Se um passo falha (ex.: horário inválido), o motivo aparece, a
+janela continua aberta e o texto avisa que o que veio antes **já foi salvo**. Mudou o endereço ou as credenciais? O pipeline é
+**reiniciado** (`registry.stop_camera`) para reabrir a fonte com os dados novos; câmera monitorada volta sozinha. Endereço
+inválido (loopback/link-local, `anti-SSRF`) ou duplicado do mesmo dono é recusado sem alterar nada.
+API: `AppCore.update_camera`, `CameraService.update`, `CameraRepository.update_basic`.
 
-## Configurações e FPS por câmera
+## 7. FPS por câmera e recomendação pelo hardware
 
-A **engrenagem** na barra lateral abre as Configurações. Cada câmera tem dois ritmos (quadros analisados por segundo):
-- **Ao assistir** (vídeo aberto): 1 a 30 fps;
-- **Monitorando** (só analisando de fundo, sem ninguém olhando): 0,2 a 10 fps.
+Cada câmera tem dois ritmos (quadros analisados por segundo): **ao assistir** (1 a 30) e **monitorando** (0,2 a 10, sem ninguém
+olhando). "Padrão" = `ATENDEIO_MAX_FPS` (5) e `ATENDEIO_MONITOR_FPS` (1). Ficam em `cameras.fps_view` / `cameras.fps_monitor`
+(NULL = padrão), são validados em `CameraService.set_fps` e **valem na hora** com a câmera ligada (`CameraHub.set_fps`).
 
-Marcado "padrão", vale o do sistema (`ATENDEIO_MAX_FPS` = 5 e `ATENDEIO_MONITOR_FPS` = 1). Os valores ficam no banco
-(`cameras.fps_view`, `cameras.fps_monitor`, NULL = padrão), são validados em `CameraService.set_fps` e **valem na hora**, com a
-câmera ligada (`CameraHub.set_fps`).
-
-**Recomendação pelo hardware** (botão "Detectar meu hardware e recomendar FPS", ou o script `scripts/recommend_fps.py`):
-`atendeio/hardware.py` detecta sistema, processador, núcleos, memória e placa de vídeo (só informativa: a análise roda na CPU) e
-**mede o YOLO de verdade** alguns quadros. A inferência é serializada, então `1000 / ms por quadro` é a capacidade total em quadros/s.
-Orçamento = 70% dela (folga para captura, interface, banco e sistema). Monitoramento: faixa até 5 fps, sugerido 1. Ao assistir: o que
-sobra depois de monitorar as outras câmeras, com teto de 15 fps (acima disso a contagem de pessoas não melhora). Sem medição, estima
-~2 fps por núcleo (marcado como estimativa). Também recomenda o máximo de câmeras (limitado pela memória: 3 / 6 / 12).
+**Recomendação** (botão da engrenagem ou `scripts/recommend_fps.py`; lógica em `atendeio/hardware.py`):
+1. Detecta sistema, processador, núcleos, memória e placa de vídeo (só informativa: a análise roda na CPU).
+2. **Mede o YOLO de verdade** (mediana de ~10 quadros). A inferência é serializada, então `1000 / ms` = capacidade total em quadros/s.
+3. Orçamento = 70% da capacidade (folga para captura, interface, banco e sistema).
+4. Monitoramento: faixa até 5 fps, sugerido 1 (reduzido se a máquina está no limite). Ao assistir: o que sobra depois de monitorar
+   as outras câmeras, teto de 15 fps (acima disso a contagem de pessoas não melhora).
+5. Máximo de câmeras recomendado, limitado pela memória (3 / 6 / 12). Sem medição, estima ~2 fps por núcleo (marcado como estimativa).
 
 ```bash
 python scripts/recommend_fps.py                 # detecta, mede e recomenda
-python scripts/recommend_fps.py --cameras 4     # considerando 4 câmeras analisando juntas
-python scripts/recommend_fps.py --no-benchmark  # só estima pelos núcleos (não carrega o modelo)
+python scripts/recommend_fps.py --cameras 4     # com 4 câmeras analisando juntas
+python scripts/recommend_fps.py --no-benchmark  # só estima (não carrega o modelo)
 python scripts/recommend_fps.py --json          # saída para outras ferramentas
 ```
 
-## Decisões de implementação
-- **Lógica sem Qt, widget fino:** o editor, os logs e os gráficos têm o modelo em módulo puro, testado direto; o Qt só desenha e
-  traduz mouse/teclado. Os testes de interface usam `QT_QPA_PLATFORM=offscreen` e eventos reais (`QTest`).
-- **Gráficos com `QPainter`:** `QtCharts` é GPL/comercial, então não é usado.
-- **Configuração do utilizador** (`QSettings`: filtros da Análise, posição da janela de logs) é isolada nos testes.
-- **Câmera ociosa é liberada:** o `AppCore` roda um coletor (`reap_idle`) que fecha a câmera que ninguém assiste nem monitora,
-  devolvendo a webcam ao sistema (no servidor isso vivia no ciclo de vida do FastAPI).
-- **Encerramento limpo** por "Sair" na bandeja, `Ctrl+C` ou `SIGTERM`: o histórico é gravado e o cofre de credenciais é esquecido.
+## 8. Dados e configuração
 
-## Falta
-Detector ONNX (hoje ~1 GB de RAM com o `torch`), enumeração de câmera USB no Windows/macOS, "Iniciar com o computador",
-licença/envio à nuvem, instaladores assinados e a limpeza do código web (só depois de você aceitar a paridade).
-Plano completo: `~/.claude/plans/precisamos-agora-mudar-o-eager-cloud.md`.
+| O quê | Onde (Linux; Windows e macOS seguem o `QStandardPaths` do Qt, ainda não verificados) |
+|---|---|
+| Banco, chave Fernet | `~/.local/share/atendeIO/atendeIO/data/` (`atendeio.db`, `secret.key`); `ATENDEIO_DATA` troca |
+| Preferências da interface (`QSettings`) | `~/.config/atendeIO/atendeIO.conf` — filtros da Análise (`an/*`) e posição da janela de logs (`logwin/<id>`) |
+| Arquivo de trava | pasta de dados do app (`atendeio.lock`) |
+
+**Banco (SQLite):** `users` (só o dono local), `sessions` (não usada pelo nativo), `cameras` (nome, tipo, `ref` sem credenciais,
+reconhecimento, classes, monitor, `fps_view`, `fps_monitor`), `zones`, `flow_minute`, `flow_hour`, `flow_area_hour`. Migrações leves
+em `Database._migrate` (colunas novas por `ALTER TABLE`, sem perder dados).
+
+**Perfil econômico** (`resources.py`): com menos de 6 GB de RAM o motor desliga a segmentação (`OCCLUSION=0`), limita a 3 câmeras e usa
+JPEG 65. Qualquer variável `ATENDEIO_*` explícita vence.
+
+## 9. Segurança e privacidade
+
+- **Nenhuma porta aberta**; só conexões de saída (e hoje nenhuma: a nuvem ainda não existe).
+- **Credenciais RTSP**: `services/credentials.py` guarda usuário/senha **só em memória**; nunca em disco (testado varrendo todos os arquivos),
+  nem em logs, eventos ou nos dados que irão à nuvem. Reiniciar o computador = pedir de novo (`UnlockDialog`).
+- **Anti-SSRF** no cadastro e na edição: loopback e link-local são barrados; redes privadas (`192.168.x.x`) são permitidas porque é onde ficam as câmeras.
+- **Isolamento por dono**: todo acesso passa por `get_owned` (mesmo com dono único, o contrato de segurança do motor foi mantido).
+- **Higiene do ambiente**: terminais de apps em snap (ex.: VS Code) exportam variáveis GTK/GSettings que derrubam bibliotecas gráficas;
+  `atendeio/app/__main__.py` restaura os originais (`*_VSCODE_SNAP_ORIG`).
+- **Limite honesto do bloqueio por plano (futuro):** software na máquina do cliente não consegue impedir que o cliente o remova; o valor real
+  tem de ficar no servidor (Análise, histórico, ingest recusado sem plano).
+
+## 10. Testes
+
+`python -m pytest` (backend, regras e interface) — ver o total no [guia de desenvolvimento](12-desenvolvimento.md#testes).
+
+| Arquivo | Cobre |
+|---|---|
+| `test_app_core.py` | `AppCore`: sem servidor web, câmera USB/RTSP, credenciais em memória, edição de câmera, coletor de ociosas |
+| `test_app_ui.py` | interface real com `QT_QPA_PLATFORM=offscreen` e eventos de mouse (`QTest`): vídeo, Salão, diálogos, editor, logs, Análise, configurações, edição, tela cheia |
+| `test_native_frames.py` | espectador nativo do hub: quadro BGR sem JPEG |
+| `test_shapes.py`, `test_zone_editor_model.py` | matemática das formas e lógica do editor |
+| `test_log_events.py`, `test_chart_models.py`, `test_app_labels.py` | logs, gráficos, rótulos |
+| `test_credentials.py` | senha só em memória, nada em disco |
+| `test_fps_settings.py`, `test_hardware.py`, `test_resources.py` | FPS por câmera (inclusive ritmo real), recomendação, perfil econômico |
+
+## 11. Decisões de implementação
+
+- **Gráficos com `QPainter`**, não `QtCharts` (GPL/comercial). **`opencv-python-headless`**: o `opencv-python` traz plugins Qt próprios que brigam com o PySide6. **`PySide6-Essentials`** (LGPL).
+- **Portas do web, mesma matemática:** `shapes.ts`→`shapes.py`, `chart-models.ts`→`charts/models.py`, `format.ts`→`format.py`, `area-labels.ts`→`labels.py`, `log-event.ts`→`log_events.py`; os testes dos `.spec.ts` viraram pytest.
+- **Preferências isoladas nos testes** (`QSettings` em pasta temporária): um teste chegou a gravar na configuração real do utilizador e quebrar o seguinte.
+- **Testes encerram o que ligam** (fixture autouse em `tests/conftest.py`): câmeras e threads vazadas disputavam CPU e derrubavam testes de tempo só na rodada completa.
+- **Detector**: hoje o YOLO via `torch` (~1 GB de RAM). A troca por **ONNX Runtime** está planejada (fica toda em `vision/detector.py`).
+
+## 12. Limitações e pendências
+
+Detector ONNX; câmera USB no Windows/macOS (`vision/sources.py` só enumera V4L2); "iniciar com o computador"; licença e bloqueio por plano;
+envio de metadados para a nuvem; instaladores assinados; limpeza do código web (só depois de você aceitar a paridade). **Windows e macOS
+não foram testados.** Veja [08-estado-e-pendencias.md](08-estado-e-pendencias.md).
+
+## 13. Identidade e internacionalização
+
+- Identificador do aplicativo (Capacitor/Android/iOS, Electron e futuros pacotes): **`com.atendeio.app`** (genérico, internacional; **não** usa
+  `br.com`). Antes de publicar em loja, alinhe-o a um domínio que você controla: depois de publicado, o identificador não muda.
+- O texto da interface está em português. O **fuso padrão da Análise ainda é `America/Sao_Paulo`** (`ATENDEIO_TIMEZONE`); fora do Brasil, defina-o
+  ou peça para o padrão passar a ser o fuso do computador.

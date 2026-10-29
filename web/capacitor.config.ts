@@ -9,7 +9,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
  *   Android → https://localhost   (androidScheme abaixo)
  */
 const config: CapacitorConfig = {
-  appId: 'br.com.atendeio.app',
+  appId: 'com.atendeio.app',
   appName: 'atendeIO',
   webDir: 'www-native',
   backgroundColor: '#121826',

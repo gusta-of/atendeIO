@@ -1,5 +1,7 @@
 # 7. Deploy e hospedagem
 
+> **Versão servidor.** O app nativo roda na máquina do cliente e dispensa servidor, HTTPS e VPN. Este documento fica como referência. Instalação do app: [12-desenvolvimento.md](12-desenvolvimento.md#empacotamento-ainda-não-feito-para-o-app-nativo).
+
 ## Cenários
 
 | Cenário | Câmeras | Quando usar |
