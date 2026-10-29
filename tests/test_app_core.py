@@ -119,3 +119,21 @@ def test_monitor_needs_person_and_flows_into_history(core, video_file):
     core.set_recognition(cam, True, [0])
     assert core.set_monitor(cam, True)["enabled"] is True
     assert wait(lambda: core.c.registry.get(cam) is not None and core.c.registry.get(cam).monitor)
+
+
+def test_an_unwatched_unmonitored_camera_is_released_so_the_webcam_is_free(core, video_file):
+    cam = core.add_local(str(video_file), "X")["id"]
+    w = core.watch(cam, lambda f, s: None)
+    assert core.c.registry.get(cam) is not None
+    w.stop()                                                           # ninguém assiste e o monitor está desligado
+    assert wait(lambda: core.c.registry.get(cam) is None, timeout=6)   # o coletor fecha o dispositivo depois do tempo ocioso
+
+
+def test_a_monitored_camera_is_never_reaped(core, video_file):
+    cam = core.add_local(str(video_file), "X")["id"]
+    core.set_recognition(cam, True, [0])
+    core.set_monitor(cam, True)
+    w = core.watch(cam, lambda f, s: None)
+    w.stop()
+    time.sleep(1.0)                                                    # bem além do idle_ttl do teste (0,1 s)
+    assert core.c.registry.get(cam) is not None                         # monitorada: continua de pé

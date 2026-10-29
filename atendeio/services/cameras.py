@@ -100,6 +100,34 @@ class CameraService:
         if self._creds is not None:
             self._creds.forget(cam_id)
 
+    # -- FPS por câmera --------------------------------------------------------------------------------
+    VIEW_FPS = (1.0, 30.0)         # faixa aceita com o vídeo aberto
+    MONITOR_FPS = (0.2, 10.0)      # faixa aceita só monitorando (sem ninguém olhando)
+
+    def get_fps(self, cam_id: int, user_id: Optional[int] = None) -> tuple:
+        """(fps_view, fps_monitor) salvos; None = padrão do sistema. Com `user_id`, confere o dono."""
+        if user_id is not None:
+            self.get_owned(cam_id, user_id)
+        return self._cameras.get_fps(cam_id)
+
+    def set_fps(self, cam_id: int, user_id: int, fps_view: Optional[float], fps_monitor: Optional[float]) -> tuple:
+        """Salva o FPS da câmera (None = voltar ao padrão). Só valores finitos dentro das faixas."""
+        self.get_owned(cam_id, user_id)
+        out = []
+        for value, (lo, hi), label in ((fps_view, self.VIEW_FPS, "ao assistir"), (fps_monitor, self.MONITOR_FPS, "no monitoramento")):
+            if value is None:
+                out.append(None)
+                continue
+            try:
+                v = float(value)
+            except (TypeError, ValueError):
+                raise ValidationError(f"FPS {label} inválido.")
+            if not (v == v and lo <= v <= hi):          # v == v descarta NaN
+                raise ValidationError(f"FPS {label}: use um valor entre {lo:g} e {hi:g}.")
+            out.append(round(v, 2))
+        self._cameras.update_fps(cam_id, user_id, out[0], out[1])
+        return tuple(out)
+
     # -- fonte de vídeo -------------------------------------------
     def source_for(self, cam: dict):
         """O que o OpenCV abre. Contém credenciais: só usar dentro do servidor."""

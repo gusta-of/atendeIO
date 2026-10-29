@@ -12,8 +12,10 @@ from .hub import CameraHub
 
 
 class HubRegistry:
-    def __init__(self, settings: Settings, detector: Detector, flow_sink: Optional[Callable[[dict], object]] = None):
-        self._cfg, self._detector, self._flow_sink = settings, detector, flow_sink
+    def __init__(self, settings: Settings, detector: Detector, flow_sink: Optional[Callable[[dict], object]] = None,
+                 fps_lookup: Optional[Callable[[int], tuple]] = None):
+        """`fps_lookup(cam_id) -> (fps_view, fps_monitor)`: o FPS salvo por câmera (None = padrão do sistema)."""
+        self._cfg, self._detector, self._flow_sink, self._fps_lookup = settings, detector, flow_sink, fps_lookup
         self._hubs: dict = {}  # cam_id -> CameraHub
         self._zombies: list = []
         self._lock = threading.Lock()
@@ -21,6 +23,11 @@ class HubRegistry:
     def _new_hub(self, cam_id, owner_id, get_source, zones, enabled, classes) -> CameraHub:
         hub = CameraHub(cam_id, owner_id, get_source, self._detector, self._cfg, zones, enabled, classes,
                         self._flow_sink)
+        if self._fps_lookup is not None:
+            try:
+                hub.set_fps(*self._fps_lookup(cam_id))
+            except Exception as e:      # configuração ilegível não impede a câmera de ligar: usa o padrão
+                print(f"[-] câmera {cam_id}: FPS salvo ignorado ({type(e).__name__})")
         self._hubs[cam_id] = hub
         hub.start()
         return hub
@@ -106,6 +113,11 @@ class HubRegistry:
         hub = self.get(cam_id)
         if hub:
             hub.set_zones(zones)
+
+    def set_fps(self, cam_id: int, fps_view: Optional[float], fps_monitor: Optional[float]) -> None:
+        hub = self.get(cam_id)
+        if hub:
+            hub.set_fps(fps_view, fps_monitor)
 
     def set_recognition(self, cam_id: int, enabled: bool, classes: frozenset) -> None:
         hub = self.get(cam_id)

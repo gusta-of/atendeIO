@@ -3,8 +3,8 @@
 import sys
 from typing import Dict
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction, QCloseEvent, QIcon
+from PySide6.QtCore import QSize, Qt, QTimer
+from PySide6.QtGui import QAction, QCloseEvent, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow,
                                QMenu, QMessageBox, QPushButton, QScrollArea, QStackedWidget, QSystemTrayIcon,
                                QVBoxLayout, QWidget)
@@ -13,7 +13,12 @@ from ...errors import DomainError
 from ..bridge import Bridge
 from ..core import AppCore
 from .camera_tile import CameraTile
+from .analytics_page import AnalyticsPage
 from .dialogs import AddLocalDialog, AddRtspDialog, ObjectsDialog, UnlockDialog
+from .icons import gear_icon
+from .logs_window import LogsWindow
+from .settings_dialog import SettingsDialog
+from .zone_editor import ZoneEditorDialog
 
 ICON = "assets/icon.png"
 
@@ -23,6 +28,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.core, self.bridge = core, bridge
         self._tiles: Dict[int, CameraTile] = {}
+        self._logs: Dict[int, LogsWindow] = {}
         self._quitting = False
         self.setWindowTitle("atendeIO")
         self.setWindowIcon(icon)
@@ -36,6 +42,7 @@ class MainWindow(QMainWindow):
         root.addWidget(self._build_content(), 1)
         self.setCentralWidget(central)
 
+        QShortcut(QKeySequence(Qt.Key.Key_F11), self, activated=self.toggle_fullscreen)   # tela cheia de verdade
         self._tray = self._build_tray(icon)
         self.reload_cameras()
         QTimer.singleShot(400, self.ask_credentials)
@@ -50,8 +57,21 @@ class MainWindow(QMainWindow):
         brand.setProperty("title", True)
         sub = QLabel("Painel de câmeras")
         sub.setProperty("muted", True)
-        lay.addWidget(brand)
-        lay.addWidget(sub)
+        top = QHBoxLayout()
+        names = QVBoxLayout()
+        names.setSpacing(0)
+        names.addWidget(brand)
+        names.addWidget(sub)
+        top.addLayout(names, 1)
+        self.settings_btn = QPushButton()
+        self.settings_btn.setIcon(gear_icon())
+        self.settings_btn.setIconSize(QSize(20, 20))
+        self.settings_btn.setProperty("ghost", True)
+        self.settings_btn.setToolTip("Configurações (FPS das câmeras e recomendação para o seu computador)")
+        self.settings_btn.setFixedSize(36, 36)
+        self.settings_btn.clicked.connect(self.open_settings)
+        top.addWidget(self.settings_btn, 0, Qt.AlignmentFlag.AlignTop)
+        lay.addLayout(top)
         lay.addSpacing(10)
         self.nav_cameras = QPushButton("Câmeras")
         self.nav_cameras.setCheckable(True)
@@ -94,10 +114,8 @@ class MainWindow(QMainWindow):
         scroll.setWidgetResizable(True)
         scroll.setWidget(self.tiles_box)
         self.stack.addWidget(scroll)
-        analysis = QLabel("Análise de fluxo\n\nChega na próxima etapa (gráficos nativos).")
-        analysis.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        analysis.setProperty("muted", True)
-        self.stack.addWidget(analysis)
+        self.analysis = AnalyticsPage(self.core)
+        self.stack.addWidget(self.analysis)
         return self.stack
 
     def _build_tray(self, icon: QIcon):
@@ -123,6 +141,8 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentIndex(page)
         self.nav_cameras.setChecked(page == 0)
         self.nav_analysis.setChecked(page == 1)
+        if page == 1:
+            self.analysis.open()
 
     def reload_cameras(self) -> None:
         checked = {cid for cid, t in self._tiles.items()}
@@ -164,8 +184,8 @@ class MainWindow(QMainWindow):
         tile.closed.connect(self._uncheck)
         tile.unlock_requested.connect(self.unlock_one)
         tile.objects_requested.connect(self.choose_objects)
-        tile.edit_zones_requested.connect(self._coming_soon)
-        tile.logs_requested.connect(self._coming_soon)
+        tile.edit_zones_requested.connect(self.edit_zones)
+        tile.logs_requested.connect(self.open_logs)
         self._tiles[cam_id] = tile
         self.empty.hide()
         self.tiles_lay.insertWidget(self.tiles_lay.count() - 1, tile)
@@ -173,6 +193,10 @@ class MainWindow(QMainWindow):
             tile.start()
 
     def close_tile(self, cam_id: int) -> None:
+        logs = self._logs.pop(cam_id, None)
+        if logs is not None:
+            logs.close()
+            logs.deleteLater()
         tile = self._tiles.pop(cam_id, None)
         if tile is not None:
             self.tiles_lay.removeWidget(tile)
@@ -226,6 +250,8 @@ class MainWindow(QMainWindow):
 
     def ask_credentials(self) -> None:
         """Na partida: câmeras de rede sem usuário/senha (nada disso fica salvo) pedem as credenciais."""
+        if self._quitting:                    # encerrando: nada de abrir diálogos
+            return
         pending = self.core.cameras_needing_credentials()
         if pending:
             UnlockDialog(self.core, pending, self).exec()
@@ -249,6 +275,29 @@ class MainWindow(QMainWindow):
             if tile:
                 tile.refresh()
 
+    def open_settings(self) -> None:
+        SettingsDialog(self.core, self).exec()
+
+    def edit_zones(self, cam_id: int) -> None:
+        tile = self._tiles.get(cam_id)
+        if tile is None:
+            return
+        state = self.core.states().get(cam_id) or {}
+        # o vídeo do cartão e o do editor não disputam a câmera: ela é a mesma e o hub é compartilhado
+        if ZoneEditorDialog(self.core, tile.cam, state.get("size"), self).exec():
+            tile.refresh()
+
+    def open_logs(self, cam_id: int) -> None:
+        tile = self._tiles.get(cam_id)
+        if tile is None:
+            return
+        win = self._logs.get(cam_id)
+        if win is None:
+            win = self._logs[cam_id] = LogsWindow(self.core, tile.cam, self)
+        win.show()
+        win.raise_()
+        win.activateWindow()
+
     def _coming_soon(self, _cam_id: int = 0) -> None:
         QMessageBox.information(self, "atendeIO", "Esta tela nativa chega na próxima etapa.")
 
@@ -264,8 +313,16 @@ class MainWindow(QMainWindow):
             tile.stop()
         super().hideEvent(event)
 
+    def toggle_fullscreen(self) -> None:
+        if self.isFullScreen():
+            self.showMaximized()
+        else:
+            self.showFullScreen()
+
     def show_window(self) -> None:
-        self.showNormal()
+        # volta do ícone da bandeja mantendo o estado anterior (maximizada continua maximizada)
+        self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
+        self.show()
         self.raise_()
         self.activateWindow()
 

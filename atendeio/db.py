@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS cameras (
     monitor_to TEXT,
     recognition INTEGER NOT NULL DEFAULT 1,  -- chave geral: 0 desliga o reconhecimento da câmera
     classes TEXT NOT NULL DEFAULT '[]',      -- JSON com os ids das classes habilitadas (vazio = nenhuma)
+    fps_view REAL,                           -- FPS com o vídeo aberto; NULL = padrão do sistema (ATENDEIO_MAX_FPS)
+    fps_monitor REAL,                        -- FPS só monitorando (sem ninguém olhando); NULL = padrão (ATENDEIO_MONITOR_FPS)
     created REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS zones (
@@ -98,6 +100,9 @@ class Database:
             conn.execute("ALTER TABLE cameras ADD COLUMN recognition INTEGER NOT NULL DEFAULT 1")
         if "classes" not in cam_cols:
             conn.execute("ALTER TABLE cameras ADD COLUMN classes TEXT NOT NULL DEFAULT '[]'")
+        for col in ("fps_view", "fps_monitor"):
+            if col not in cam_cols:
+                conn.execute(f"ALTER TABLE cameras ADD COLUMN {col} REAL")
 
     def init(self) -> None:
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)

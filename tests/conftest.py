@@ -71,3 +71,28 @@ def new_client(container):
     yield make
     for c in clients:
         c.close()
+
+
+@pytest.fixture(autouse=True)
+def _no_leaked_pipelines(monkeypatch):
+    """Nenhum teste pode deixar câmera, escritor de histórico ou monitor rodando para o seguinte: threads vazadas disputam CPU
+    e tornam testes de tempo instáveis (só falhavam na rodada completa). Tudo que o teste criou é encerrado ao final."""
+    from atendeio.services.monitor import MonitorScheduler
+    from atendeio.streaming.flow_writer import FlowWriter
+    from atendeio.streaming.registry import HubRegistry
+
+    made = {HubRegistry: [], FlowWriter: [], MonitorScheduler: []}
+    for cls, bucket in made.items():
+        orig = cls.__init__
+
+        def tracked(self, *a, __orig=orig, __bucket=bucket, **k):
+            __orig(self, *a, **k)
+            __bucket.append(self)
+        monkeypatch.setattr(cls, "__init__", tracked)
+    yield
+    for sched in made[MonitorScheduler]:
+        sched.stop()
+    for reg in made[HubRegistry]:
+        reg.stop_all()
+    for writer in made[FlowWriter]:
+        writer.stop(timeout=0.5)         # alguns testes travam o escritor de propósito (disco lento): não espera por ele

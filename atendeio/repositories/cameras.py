@@ -54,6 +54,17 @@ class CameraRepository:
             return c.execute("UPDATE cameras SET monitor=?, monitor_from=?, monitor_to=? WHERE id=? AND user_id=?",
                              (1 if enabled else 0, from_ or None, to or None, cam_id, user_id)).rowcount > 0
 
+    def get_fps(self, cam_id: int) -> tuple:
+        """(fps_view, fps_monitor) da câmera; None = usar o padrão do sistema. Sem filtro de dono: só o motor consulta."""
+        with closing(self._db.connect()) as c:
+            row = c.execute("SELECT fps_view, fps_monitor FROM cameras WHERE id=?", (cam_id,)).fetchone()
+        return (row["fps_view"], row["fps_monitor"]) if row else (None, None)
+
+    def update_fps(self, cam_id: int, user_id: int, fps_view: Optional[float], fps_monitor: Optional[float]) -> bool:
+        with closing(self._db.connect()) as c, c:
+            return c.execute("UPDATE cameras SET fps_view=?, fps_monitor=? WHERE id=? AND user_id=?",
+                             (fps_view, fps_monitor, cam_id, user_id)).rowcount > 0
+
     def list_monitored(self) -> list:
         """Todas as câmeras com monitoramento ligado (de todos os utilizadores): é o agendador do servidor que usa."""
         with closing(self._db.connect()) as c:

@@ -100,6 +100,8 @@ class EventBus:
         self.camera_id = camera_id
         self._rate = rate
         self._ring = deque(maxlen=history)
+        self._fring = deque(maxlen=history)   # quadros detalhados: só guardados enquanto um ouvinte NATIVO os pede
+        self._native_detail = 0
         self._subs: List[Subscriber] = []
         self._seq = 0
         self._lock = threading.Lock()
@@ -110,7 +112,7 @@ class EventBus:
         """Publica um evento. `frame` só é montado/enviado se há ouvinte detalhado: o chamador pode
         perguntar `wants_detail()` antes e nem construir o dado."""
         with self._lock:
-            if type_ == "frame" and not any(s.detail for s in self._subs):
+            if type_ == "frame" and not (self._native_detail or any(s.detail for s in self._subs)):
                 return None
             self._seq += 1
             ts = int(self._clock() * 1000)
@@ -118,6 +120,8 @@ class EventBus:
             ev.raw = encode_sse(ev)             # serializa uma vez, aqui, fora do laço de eventos
             if type_ != "frame":
                 self._ring.append(ev)
+            elif self._native_detail:
+                self._fring.append(ev)
             now = self._clock()
             targets = [s for s in self._subs if (type_ != "frame" or s.detail) and s.allow(now)]
         for s in targets:
@@ -127,7 +131,18 @@ class EventBus:
 
     def wants_detail(self) -> bool:
         with self._lock:
-            return any(s.detail for s in self._subs)
+            return self._native_detail > 0 or any(s.detail for s in self._subs)
+
+    def add_detail_listener(self) -> None:
+        """Ouvinte nativo (janela de logs do app desktop) que quer os quadros detalhados: o hub passa a montá-los."""
+        with self._lock:
+            self._native_detail += 1
+
+    def remove_detail_listener(self) -> None:
+        with self._lock:
+            self._native_detail = max(0, self._native_detail - 1)
+            if not self._native_detail:
+                self._fring.clear()
 
     # -- ouvintes ----------------------------------------------------------------------------
     def subscribe(self, loop, detail: bool = False, since: Optional[int] = None, history: bool = True):
@@ -147,10 +162,14 @@ class EventBus:
         with self._lock:
             return len(self._subs)
 
-    def recent_since(self, seq: int) -> list:
-        """Eventos com `seq` maior que o informado (o painel de logs nativo consulta de tempos em tempos, sem SSE)."""
+    def recent_since(self, seq: int, frames: bool = False) -> list:
+        """Eventos com `seq` maior que o informado (o painel de logs nativo consulta de tempos em tempos, sem SSE).
+        `frames=True` inclui os quadros detalhados (só existem se algum ouvinte nativo os pediu)."""
         with self._lock:
-            return [e for e in self._ring if e["seq"] > seq]
+            out = [e for e in self._ring if e["seq"] > seq]
+            if frames:
+                out += [e for e in self._fring if e["seq"] > seq]
+        return sorted(out, key=lambda e: e["seq"]) if frames else out
 
     def recent(self, n: int = 50) -> list:
         with self._lock:

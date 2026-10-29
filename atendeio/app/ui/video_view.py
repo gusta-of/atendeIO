@@ -15,10 +15,32 @@ class VideoView(QWidget):
         self._image: Optional[QImage] = None
         self._message = "Aguardando imagem…"
         self.setMinimumHeight(240)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        policy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        policy.setHeightForWidth(True)                       # a altura acompanha a largura (proporção da câmera)
+        self.setSizePolicy(policy)
+
+    MAX_HEIGHT = 720
+
+    def _aspect(self) -> float:
+        if self._image is not None and not self._image.isNull() and self._image.height():
+            return self._image.width() / self._image.height()
+        return 16 / 9
+
+    def hasHeightForWidth(self) -> bool:                    # noqa: N802 (Qt)
+        return True
+
+    def heightForWidth(self, w: int) -> int:                # noqa: N802 (Qt)
+        return max(240, min(self.MAX_HEIGHT, int(w / self._aspect())))
+
+    def sizeHint(self):                                     # noqa: N802 (Qt)
+        from PySide6.QtCore import QSize
+        return QSize(640, self.heightForWidth(640))
 
     def set_image(self, image: QImage) -> None:
+        first_or_changed = (self._image is None or self._image.size() != image.size())
         self._image, self._message = image, ""
+        if first_or_changed:
+            self.updateGeometry()                          # proporção nova: refaz a altura
         self.update()
 
     def set_message(self, text: str) -> None:

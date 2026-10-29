@@ -42,6 +42,8 @@ class CameraHub:
         """`get_source()` é chamado a cada (re)conexão: credenciais não ficam em atributo.
         `flow_sink(lote)` recebe o histórico de fluxo agregado (nunca bloqueia: é a fila do FlowWriter)."""
         self.cam_id, self.owner_id = cam_id, owner_id
+        self.fps_view: Optional[float] = None      # FPS por câmera (None = padrão do sistema)
+        self.fps_monitor: Optional[float] = None
         self.monitor = False          # monitoramento contínuo: o hub fica de pé mesmo sem ninguém assistindo
         self._wake = threading.Event()  # acorda a espera entre quadros (novo espectador, parada)
         self._flow = FlowAggregator(cam_id, settings.flow_flush_s)
@@ -177,7 +179,7 @@ class CameraHub:
             t0 = time.monotonic()
             # ritmo: cheio com vídeo aberto; devagar (monitor_fps) quando só a análise está rodando
             has_video = self._has_video()
-            target_fps = self._cfg.max_fps if has_video else self._cfg.monitor_fps
+            target_fps = (self.fps_view or self._cfg.max_fps) if has_video else (self.fps_monitor or self._cfg.monitor_fps)
             try:
                 enabled, classes = self._recognition
                 wants, nwants = self._wanted(), self._wanted_frames()
@@ -328,6 +330,11 @@ class CameraHub:
         # `person`: sem a classe Pessoa marcada, nenhuma mesa pode ficar ocupada (a UI avisa em vez de dizer "Livre")
         return {"enabled": enabled, "classes": None if classes is None else len(classes),
                 "person": classes is None or 0 in classes}
+
+    def set_fps(self, fps_view: Optional[float], fps_monitor: Optional[float]) -> None:
+        """FPS desta câmera (None = padrão do sistema). Vale na hora: o próximo ciclo da inferência já usa."""
+        self.fps_view, self.fps_monitor = fps_view, fps_monitor
+        self._wake.set()
 
     def set_recognition(self, enabled: bool, classes: frozenset) -> None:
         """Chamado por thread de request: troca a configuração e zera o que dependia da anterior

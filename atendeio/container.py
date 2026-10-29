@@ -61,7 +61,7 @@ def build_container(settings: Settings, *, device_lister: Optional[Callable] = N
     detector = detector or Detector(settings.model_path, settings.conf_threshold, settings.seg_model_path)
     flow_repo = FlowRepository(db)
     flow_writer = FlowWriter(flow_repo, settings)
-    registry = HubRegistry(settings, detector, flow_sink=flow_writer.submit)   # hubs só enfileiram; quem grava é o escritor
+    registry = HubRegistry(settings, detector, flow_sink=flow_writer.submit, fps_lookup=cameras.get_fps)   # hubs só enfileiram; quem grava é o escritor
     zones = ZoneService(ZoneRepository(db), camera_service, settings)
     return Container(
         settings=settings,

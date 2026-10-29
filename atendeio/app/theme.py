@@ -34,6 +34,8 @@ QLineEdit:focus, QComboBox:focus, QSpinBox:focus {{ border-color: {ACCENT}; }}
 QComboBox QAbstractItemView {{ background: {PANEL}; border: 1px solid {BORDER_STRONG}; selection-background-color: {ACCENT_SOFT}; }}
 QListWidget, QTreeWidget {{ background: transparent; border: 0; outline: 0; }}
 QListWidget::item {{ padding: 8px; border-radius: 8px; }}
+QListWidget::indicator {{ width: 16px; height: 16px; border-radius: 4px; border: 1px solid {BORDER_STRONG}; background: {BG2}; }}
+QListWidget::indicator:checked {{ background: {ACCENT}; border-color: {ACCENT}; }}
 QListWidget::item:selected, QListWidget::item:hover {{ background: {PANEL2}; }}
 QTreeWidget::item {{ padding: 3px; }}
 QCheckBox {{ spacing: 8px; background: transparent; }}

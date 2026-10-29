@@ -5,11 +5,13 @@ utilizador local, sem login por senha). Usuário e senha RTSP vivem só na memó
 
 import threading
 from dataclasses import dataclass, replace
+from datetime import date, timedelta
 from typing import Callable, Optional
 
 from ..analytics.zones import KINDS
 from ..config import Settings
 from ..container import Container, build_container
+from ..errors import ValidationError
 from ..services import rtsp
 from ..services.zones import to_zone
 
@@ -41,6 +43,8 @@ class AppCore:
         self.user_id = self.c.auth.ensure_local_user()
         self._started = False
         self._lock = threading.Lock()
+        self._stop_evt = threading.Event()
+        self._reaper: Optional[threading.Thread] = None
 
     # -- ciclo de vida -----------------------------------------------------------------------
     def start(self) -> None:
@@ -48,8 +52,21 @@ class AppCore:
             if self._started:
                 return
             self._started = True
+        self._stop_evt.clear()
         self.c.flow_writer.start()
         self.c.scheduler.start()
+        self._reaper = threading.Thread(target=self._reap_loop, name="reaper", daemon=True)
+        self._reaper.start()
+
+    def _reap_loop(self) -> None:
+        """Libera a câmera que ninguém assiste nem monitora (fecha o dispositivo e para a análise). No servidor isso rodava no
+        ciclo de vida do FastAPI; no app nativo precisa existir aqui, senão a webcam fica aberta para sempre."""
+        interval = min(10.0, max(0.05, self.settings.idle_ttl_s / 3))
+        while not self._stop_evt.wait(interval):
+            try:
+                self.c.registry.reap_idle()
+            except Exception as e:
+                print(f"[-] coletor de câmeras ociosas: {type(e).__name__}: {e}")
 
     def stop(self) -> None:
         """Saída limpa: o monitor solta os hubs, cada hub entrega o histórico, o escritor grava e o cofre é esquecido."""
@@ -57,6 +74,7 @@ class AppCore:
             if not self._started:
                 return
             self._started = False
+        self._stop_evt.set()
         self.c.scheduler.stop()
         self.c.registry.stop_all()
         self.c.flow_writer.stop()
@@ -98,6 +116,18 @@ class AppCore:
 
     def cameras_needing_credentials(self) -> list:
         return [c for c in self.cameras() if c.get("needs_credentials")]
+
+    # -- FPS por câmera ----------------------------------------------------------------------------
+    def fps(self, cam_id: int) -> dict:
+        """FPS salvo (None = padrão) e os padrões do sistema, para a tela de configuração."""
+        view, monitor = self.c.cameras.get_fps(cam_id, self.user_id)
+        return {"view": view, "monitor": monitor, "default_view": self.settings.max_fps,
+                "default_monitor": self.settings.monitor_fps}
+
+    def set_fps(self, cam_id: int, fps_view: Optional[float], fps_monitor: Optional[float]) -> dict:
+        view, monitor = self.c.cameras.set_fps(cam_id, self.user_id, fps_view, fps_monitor)
+        self.c.registry.set_fps(cam_id, view, monitor)             # vale na hora, com a câmera ligada
+        return self.fps(cam_id)
 
     # -- reconhecimento --------------------------------------------------------------------------
     def class_catalog(self) -> dict:
@@ -151,13 +181,45 @@ class AppCore:
     def states(self) -> dict:
         return self.c.registry.states_for(self.user_id)
 
-    def events_since(self, cam_id: int, seq: int) -> list:
+    def event_bus(self, cam_id: int):
+        """O barramento de eventos da câmera (None se ela não está ligada agora)."""
         hub = self.c.registry.get(cam_id)
-        return hub.events.recent_since(seq) if hub else []
+        return hub.events if hub else None
 
-    # -- análise de fluxo (dados locais) ---------------------------------------------------------------
-    def flow_report(self, cam_id: int, **kw) -> dict:
-        return self.c.flow.report(cam_id, self.user_id, **kw)
+    def events_since(self, cam_id: int, seq: int, frames: bool = False) -> list:
+        bus = self.event_bus(cam_id)
+        return bus.recent_since(seq, frames) if bus else []
+
+    # -- análise de fluxo (dados locais) ---------------------------------------------------------------------
+    def _span(self, days: Optional[int], d_from, d_to) -> tuple:
+        """`days=N`: os últimos N dias terminando HOJE no fuso do restaurante (o computador pode estar em outro fuso)."""
+        if days is not None and not (d_from or d_to):
+            if not 1 <= days <= 731:
+                raise ValidationError("Número de dias inválido (de 1 a 731).")
+            end = self.c.flow.today()
+            return end - timedelta(days=days - 1), end
+        return _as_date(d_from), _as_date(d_to)
+
+    def flow_report(self, cam_id: int, days: Optional[int] = None, d_from=None, d_to=None,
+                    hour_from: int = 0, hour_to: int = 24) -> dict:
+        a, b = self._span(days, d_from, d_to)
+        return self.c.flow.report(cam_id, self.user_id, a, b, hour_from, hour_to)
 
     def flow_day(self, cam_id: int, day=None) -> dict:
-        return self.c.flow.day(cam_id, self.user_id, day)
+        return self.c.flow.day(cam_id, self.user_id, _as_date(day))
+
+    def flow_csv(self, cam_id: int, days: Optional[int] = None, d_from=None, d_to=None,
+                 hour_from: int = 0, hour_to: int = 24) -> str:
+        a, b = self._span(days, d_from, d_to)
+        return self.c.flow.csv(cam_id, self.user_id, a, b, hour_from, hour_to)
+
+
+def _as_date(value) -> Optional[date]:
+    if not value:
+        return None
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError:
+        raise ValidationError("Data inválida. Use o formato AAAA-MM-DD.")

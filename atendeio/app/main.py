@@ -1,6 +1,7 @@
 """Ponto de entrada do app desktop: UM processo, interface Qt, nenhuma porta aberta."""
 
 import os
+import signal
 import sys
 import threading
 from pathlib import Path
@@ -8,7 +9,7 @@ from pathlib import Path
 
 def main() -> int:
     os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
-    from PySide6.QtCore import QLockFile, QStandardPaths
+    from PySide6.QtCore import QLockFile, QStandardPaths, QTimer
     from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -41,8 +42,14 @@ def main() -> int:
 
     bridge = Bridge()
     window = MainWindow(core, bridge, icon)
+    # Ctrl+C / kill: encerra COM limpeza (grava o histórico). O Qt só devolve o controle ao Python de tempos em tempos.
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(sig, lambda *_: window.quit_app())
+    wake = QTimer()
+    wake.start(300)
+    wake.timeout.connect(lambda: None)
     if "--hidden" not in sys.argv:
-        window.show()
+        window.showMaximized()              # abre ocupando a tela toda
     try:
         return app.exec()
     finally:
