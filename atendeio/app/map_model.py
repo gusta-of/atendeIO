@@ -190,8 +190,10 @@ def to_world(lay: "Layout", aspect: float, calib, x: float, y: float) -> Tuple[f
 
 # -- cena -------------------------------------------------------------------------------------------------------------
 def _block(camera_id: int, zone: dict, area: Optional[dict], state: Optional[dict], lay: Layout, aspect: float,
-           status: str, blind: bool, rules: AlertRules, calib=None) -> Block:
-    pts = [to_world(lay, aspect, calib, x, y) for x, y in zone["points"]]
+           status: str, blind: bool, rules: AlertRules, calib=None, lift: float = 0.0) -> Block:
+    # mesa: o polígono é o TAMPO; com o chão calibrado ele desce até a base (o chão da mesa) antes de ir para a planta
+    dy = lift if (calib is not None and zone["kind"] == "mesa") else 0.0
+    pts = [to_world(lay, aspect, calib, x, y + dy) for x, y in zone["points"]]
     kind = zone["kind"]
     no_read = blind and kind == "mesa"
     stat = area.get("status") if (area and kind == "mesa" and not no_read) else None
@@ -223,7 +225,8 @@ def _block(camera_id: int, zone: dict, area: Optional[dict], state: Optional[dic
 
 def build_scene(cameras: Sequence[dict], zones: Dict[int, list], states: Dict[int, Optional[dict]],
                 layouts: Dict[int, Layout], aspects: Optional[Dict[int, float]] = None,
-                rules: Optional[AlertRules] = None, limited: Sequence[int] = (), calibs: Optional[Dict[int, object]] = None) -> Scene:
+                rules: Optional[AlertRules] = None, limited: Sequence[int] = (), calibs: Optional[Dict[int, object]] = None,
+                lifts: Optional[Dict[int, object]] = None) -> Scene:
     """Monta a cena inteira. `layouts` pode estar incompleto: o que faltar vem do `auto_layout`."""
     rules = rules or AlertRules()
     aspects = dict(aspects or {})
@@ -243,7 +246,9 @@ def build_scene(cameras: Sequence[dict], zones: Dict[int, list], states: Dict[in
         areas = {a["id"]: a for a in (st or {}).get("areas", [])}
         blind = labels.no_reading(st)
         calib = (calibs or {}).get(cid)
-        blocks = [_block(cid, z, areas.get(z["id"]), st, lay, aspect, status, blind, rules, calib) for z in zones.get(cid, [])]
+        lift_fn = (lifts or {}).get(cid)             # y_base -> descida do tampo até o chão (fração do quadro)
+        blocks = [_block(cid, z, areas.get(z["id"]), st, lay, aspect, status, blind, rules, calib,
+                         lift_fn(max(y for _, y in z["points"])) if (lift_fn and z["points"]) else 0.0) for z in zones.get(cid, [])]
         summary = CameraSummary(cid, cam["name"], status, fps=float((st or {}).get("fps") or 0.0),
                                 people=(st or {}).get("people") if status == "ok" else None, reading=not blind)
         for b in blocks:

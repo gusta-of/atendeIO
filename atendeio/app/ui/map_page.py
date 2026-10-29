@@ -17,6 +17,7 @@ from ..charts import models as CM
 from .. import prefs
 from ..core import AppCore
 from ..format import hh
+from ..people_model import PersonScale
 from .charts import ColumnChart
 from .floor_calib_dialog import FloorCalibDialog
 from .hall_panel import ScrollList
@@ -106,6 +107,7 @@ class MapPage(QWidget):
         self.rules = load_rules()
         self.layouts: Dict[int, M.Layout] = {}
         self.calibs: dict = {}
+        self.person_scale = PersonScale()
         self.aspects: Dict[int, float] = {}
         self.snap: Optional[dict] = None
         self.scene: Optional[M.Scene] = None
@@ -361,7 +363,13 @@ class MapPage(QWidget):
         if not self.snap:
             return
         s = self.snap
-        self.scene = M.build_scene(s["cameras"], s["zones"], s["states"], self.layouts, self.aspects, self.rules, s["limited"], self.calibs)
+        for cid, st in s["states"].items():                 # escala aprendida: quanto mede uma pessoa de pé em cada linha da imagem
+            for t in ((st or {}).get("tracks") or []):
+                if t.get("full"):
+                    self.person_scale.add(cid, t["y"], t["h"])
+        lifts = {cid: (lambda y, cid=cid: self.person_scale.table_lift(cid, y)) for cid in s["states"]}
+        self.scene = M.build_scene(s["cameras"], s["zones"], s["states"], self.layouts, self.aspects, self.rules, s["limited"],
+                                   self.calibs, lifts)
         for sec in self.scene.sections:
             h = sec.rect[3] - sec.rect[1]
             if h:

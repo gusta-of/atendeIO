@@ -322,7 +322,9 @@ class CameraHub:
         state["people"] = self._people_counter.update(len(persons), now)
         tracked = self._tracker.update(persons, now) if (self._analyzer.has_zones or self.map_pin) else []
         # pés (centro da base da caixa) com id anônimo: só para o Mapa; nada disso vai para o disco
-        state["tracks"] = [{"id": i, "x": round((b[0] + b[2]) / 2, 4), "y": round(b[3], 4)} for i, b in tracked]
+        state["tracks"] = [{"id": i, "x": round((b[0] + b[2]) / 2, 4), "y": round(b[3], 4), "h": round(b[3] - b[1], 4),
+                            "full": b[1] > 0.01 and b[3] < 0.985}      # "full": corpo inteiro no quadro (serve para estimar a escala)
+                           for i, b in tracked]
         if self._analyzer.has_zones:
             people = tracked
             items = [d["box"] for d in dets if d["name"] in self._items]
